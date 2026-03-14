@@ -146,18 +146,18 @@ def load_trend_universe_from_firestore():
     try:
         payload = db.collection(collection).document(document).get()
         if not payload.exists:
-            print(f"动态趋势池 Firestore 文档不存在，继续尝试本地文件: {collection}/{document}")
+            print(f"Trend pool Firestore doc missing, trying local: {collection}/{document}")
             return {}
 
         parsed = parse_trend_universe_mapping(payload.to_dict())
         if not parsed:
-            print(f"动态趋势池 Firestore 文档结构无效，继续尝试本地文件: {collection}/{document}")
+            print(f"Trend pool Firestore payload invalid, trying local: {collection}/{document}")
             return {}
 
-        print(f"已从 Firestore 加载动态趋势池: {collection}/{document} | symbols={','.join(parsed.keys())}")
+        print(f"Loaded trend pool from Firestore: {collection}/{document} | symbols={','.join(parsed.keys())}")
         return parsed
     except Exception as exc:
-        print(f"读取 Firestore 动态趋势池失败，继续尝试本地文件: {exc}")
+        print(f"Firestore trend pool read failed, trying local: {exc}")
         return {}
 
 
@@ -170,16 +170,16 @@ def load_trend_universe_from_live_pool():
         if configured_path:
             configured_pool_path = Path(configured_path).expanduser()
             if not configured_pool_path.exists():
-                print(f"显式配置的趋势池文件不存在，回退静态 TREND_UNIVERSE: {configured_pool_path}")
+                print(f"TREND_POOL_FILE not found, fallback to static: {configured_pool_path}")
                 return fallback
 
             payload = json.loads(configured_pool_path.read_text(encoding="utf-8"))
             parsed = parse_trend_universe_mapping(payload)
             if not parsed:
-                print(f"显式配置的趋势池文件结构无效，回退静态 TREND_UNIVERSE: {configured_pool_path}")
+                print(f"TREND_POOL_FILE invalid, fallback to static: {configured_pool_path}")
                 return fallback
 
-            print(f"已加载动态趋势池文件: {configured_pool_path} | symbols={','.join(parsed.keys())}")
+            print(f"Loaded trend pool file: {configured_pool_path} | symbols={','.join(parsed.keys())}")
             return parsed
 
         firestore_pool = load_trend_universe_from_firestore()
@@ -193,16 +193,16 @@ def load_trend_universe_from_live_pool():
             payload = json.loads(pool_path.read_text(encoding="utf-8"))
             parsed = parse_trend_universe_mapping(payload)
             if not parsed:
-                print(f"趋势池文件结构无效，继续尝试其他路径: {pool_path}")
+                print(f"Pool file invalid, trying next: {pool_path}")
                 continue
 
-            print(f"已加载动态趋势池文件: {pool_path} | symbols={','.join(parsed.keys())}")
+            print(f"Loaded trend pool file: {pool_path} | symbols={','.join(parsed.keys())}")
             return parsed
 
-        print("未找到可用的动态趋势池发布产物，回退静态 TREND_UNIVERSE")
+        print("No upstream trend pool found, using static TREND_UNIVERSE")
         return fallback
     except Exception as exc:
-        print(f"读取动态趋势池失败，回退静态 TREND_UNIVERSE: {exc}")
+        print(f"Trend pool load failed, using static: {exc}")
         return fallback
 
 
@@ -330,7 +330,7 @@ def set_symbol_trade_state(state, symbol, symbol_state):
         retired_positions.pop(symbol, None)
 
 # ==========================================
-# 1. 状态管理与 TG 推送
+# 1. State persistence and Telegram
 # ==========================================
 db = firestore.Client()
 doc_ref = db.collection('strategy').document('MULTI_ASSET_STATE')
@@ -349,7 +349,7 @@ def set_trade_state(data):
         persisted_state = normalize_trade_state(data)
         doc_ref.set(persisted_state)
     except Exception as e:
-        print(f"Firestore写入失败: {e}")
+        print(f"Firestore write failed: {e}")
 
 def send_tg_msg(token, chat_id, text):
     if not token or not chat_id: return
@@ -357,13 +357,13 @@ def send_tg_msg(token, chat_id, text):
     try:
         requests.post(url, data={"chat_id": chat_id, "text": f"🤖 加密货币量化助手：\n{text}"}, timeout=10)
     except:
-        print("TG 推送失败")
+        print("Telegram send failed")
 
 # ==========================================
-# 2. 理财与资产管理辅助核心
+# 2. Earn and balance helpers
 # ==========================================
 def get_total_balance(client, asset):
-    """获取指定资产的总可用余额（包含现货与活期理财）"""
+    """Total balance for asset (spot + flexible earn)."""
     total = 0.0
     try:
         spot_info = client.get_asset_balance(asset=asset)
@@ -377,7 +377,7 @@ def get_total_balance(client, asset):
     return total
 
 def ensure_asset_available(client, asset, required_amount, tg_token, tg_chat_id):
-    """下单前置资金保障：现货不够时，自动从理财极速赎回缺口"""
+    """Redeem from flexible earn if spot balance is below required amount."""
     try:
         spot_free = float(client.get_asset_balance(asset=asset)['free'])
         if spot_free >= required_amount: 
@@ -392,18 +392,18 @@ def ensure_asset_available(client, asset, required_amount, tg_token, tg_chat_id)
             earn_free = float(row['totalAmount'])
             
             if earn_free > 0:
-                redeem_amt = min(shortfall * 1.001, earn_free) # 1.001 为精度缓冲
-                redeem_amt = round(redeem_amt, 8) 
+                redeem_amt = min(shortfall * 1.001, earn_free)  # precision buffer
+                redeem_amt = round(redeem_amt, 8)
                 client.redeem_simple_earn_flexible_product(productId=product_id, amount=redeem_amt)
                 send_tg_msg(tg_token, tg_chat_id, f"🔄 [交易调度] 现货 {asset} 不足，秒赎回: {redeem_amt}")
-                time.sleep(3) # 等待资金划转到账
+                time.sleep(3)  # wait for settlement
                 return True
     except Exception as e: 
         send_tg_msg(tg_token, tg_chat_id, f"⚠️ [交易调度] {asset} 赎回失败: {e}")
     return False
 
 def manage_usdt_earn_buffer(client, target_buffer, tg_token, tg_chat_id, log_buffer):
-    """资金管家：多退少补，全自动维护现货 USDT 储备水位"""
+    """Keep USDT spot buffer near target by subscribing/redeeming flexible earn."""
     try:
         asset = 'USDT'
         spot_free = float(client.get_asset_balance(asset=asset)['free'])
@@ -413,15 +413,15 @@ def manage_usdt_earn_buffer(client, target_buffer, tg_token, tg_chat_id, log_buf
             return
         product_id = earn_list['rows'][0]['productId']
         
-        # 多退：现货过多，存入理财赚利息 (宽容度 5U)
+        # Excess spot -> subscribe to earn (tolerance 5 USDT)
         if spot_free > target_buffer + 5.0:
             excess = round(spot_free - target_buffer, 4)
-            if excess >= 0.1: 
+            if excess >= 0.1:
                 client.subscribe_simple_earn_flexible_product(productId=product_id, amount=excess)
                 msg = f"📥 [资金管家] 现货结余过多，自动存入理财: ${excess:.2f}"
                 log_buffer.append(msg)
-                
-        # 少补：现货见底，从理财赎回补充 (宽容度 5U)
+
+        # Shortfall -> redeem from earn (tolerance 5 USDT)
         elif spot_free < target_buffer - 5.0:
             shortfall = round(target_buffer - spot_free, 4)
             earn_positions = client.get_simple_earn_flexible_product_position(asset=asset)
@@ -437,25 +437,24 @@ def manage_usdt_earn_buffer(client, target_buffer, tg_token, tg_chat_id, log_buf
         log_buffer.append(f"⚠️ USDT理财池维护失败: {e}")
 
 def format_qty(client, symbol, qty):
-    """动态获取币安规定的下单精度，防止 LOT_SIZE 报错"""
+    """Round quantity to exchange LOT_SIZE to avoid filter errors."""
     try:
         info = client.get_symbol_info(symbol)
         step_size = float([f['stepSize'] for f in info['filters'] if f['filterType'] == 'LOT_SIZE'][0])
         precision = int(round(-math.log(step_size, 10), 0))
         return round(math.floor(qty / step_size) * step_size, precision)
     except:
-        return round(math.floor(qty * 10000) / 10000, 4) # 降级回退方案
-
+        return round(math.floor(qty * 10000) / 10000, 4)  # fallback
 
 def get_dynamic_btc_target_ratio(total_equity):
-    """随着净值增长，逐步提高 BTC 目标权重，不设置硬性最低比例。"""
+    """BTC target weight increases with equity; no hard minimum."""
     safe_equity = max(float(total_equity), 1.0)
     ratio = 0.14 + 0.16 * math.log1p(safe_equity / 10000.0)
     return min(0.65, max(0.0, ratio))
 
 
 def get_dynamic_btc_base_order(total_equity):
-    """净值越大，BTC 每日基础定投额也同步抬升。"""
+    """Daily DCA base order scales with total equity."""
     return max(15.0, float(total_equity) * 0.0012)
 
 
@@ -517,7 +516,7 @@ def maybe_send_periodic_btc_status_report(
 
 
 def fetch_daily_indicators(client, symbol, lookback_days=420):
-    """获取单个标的的日线指标，用于轮动与风控."""
+    """Daily indicators for one symbol (rotation and risk)."""
     klines = client.get_historical_klines(symbol, Client.KLINE_INTERVAL_1DAY, f"{lookback_days} days ago UTC")
     if not klines:
         return None
@@ -587,17 +586,17 @@ def fetch_daily_indicators(client, symbol, lookback_days=420):
 
 
 def fetch_btc_market_snapshot(client, btc_price, lookback_days=700, log_buffer=None):
-    """复用一套 BTC 日线数据，同时服务于 DCA 与趋势闸门."""
+    """Single BTC daily series for DCA and trend gate."""
     try:
         klines = client.get_historical_klines("BTCUSDT", Client.KLINE_INTERVAL_1DAY, f"{lookback_days} days ago UTC")
     except Exception as e:
         if log_buffer is not None:
-            log_buffer.append(f"⚠️ 获取 BTC 日线失败: {e}")
+            log_buffer.append(f"⚠️ BTC daily fetch failed: {e}")
         return None
 
     if not klines:
         if log_buffer is not None:
-            log_buffer.append("⚠️ BTC 日线数据为空，无法计算指标。")
+            log_buffer.append("⚠️ BTC daily data empty.")
         return None
 
     df = pd.DataFrame(klines).iloc[:, :6]
@@ -614,13 +613,13 @@ def fetch_btc_market_snapshot(client, btc_price, lookback_days=700, log_buffer=N
     df["btc_roc60"] = df["close"].pct_change(60)
     df["btc_roc120"] = df["close"].pct_change(120)
 
-    # 所有关键指标必须完整，避免引入隐性不确定性
+    # All core fields must be non-NaN
     required_fields = ["ma200", "zscore", "geom200", "sell_trigger", "ma200_slope", "btc_roc20", "btc_roc60", "btc_roc120"]
     valid = df.dropna(subset=required_fields)
     if valid.empty:
         if log_buffer is not None:
             last_time = df["time"].iloc[-1] if not df.empty else None
-            log_buffer.append(f"⚠️ BTC 日线数据不足以计算 MA200/Z-Score 等指标。len={len(df)}, last_time={last_time}")
+            log_buffer.append(f"⚠️ BTC data insufficient for MA200/Z-Score. len={len(df)}, last_time={last_time}")
         return None
 
     latest = valid.iloc[-1]
@@ -769,7 +768,7 @@ def refresh_rotation_pool(state, indicators_map, btc_snapshot):
 
 
 def select_rotation_weights(indicators_map, prices, btc_snapshot, candidate_pool, top_n):
-    """在月更稳健质量池中，用相对 BTC 强弱挑出最终持仓标的."""
+    """Pick final trend holdings from monthly pool by relative BTC strength."""
     btc_regime_on = btc_snapshot["regime_on"]
     if not btc_regime_on:
         return {}
@@ -815,7 +814,7 @@ def select_rotation_weights(indicators_map, prices, btc_snapshot, candidate_pool
 
 
 def get_tradable_qty(symbol, total_qty, prices, min_bnb_value):
-    """BNB 需要预留一小部分做手续费，其余仓位才允许参与轮动."""
+    """Reserve BNB for fees; rest is tradable."""
     if symbol != "BNBUSDT":
         return max(0.0, total_qty)
 
@@ -827,10 +826,10 @@ def get_tradable_qty(symbol, total_qty, prices, min_bnb_value):
     return max(0.0, total_qty - reserve_qty)
 
 # ==========================================
-# 3. 核心量化逻辑
+# 3. Core strategy
 # ==========================================
 def main():
-    # --- 核心配置 ---
+    # --- Config ---
     global TREND_UNIVERSE
     TREND_UNIVERSE = load_trend_universe_from_live_pool()
     ATR_MULTIPLIER = 2.5
@@ -848,7 +847,7 @@ def main():
     max_retries = 3
 
     try:
-        # --- API 连接与状态获取 ---
+        # --- API and state ---
         for i in range(max_retries):
             try:
                 client = Client(api_key, api_secret, {"timeout": 30}) 
@@ -861,19 +860,19 @@ def main():
                     return
 
         state = get_trade_state()
-        if state is None: raise Exception("无法获取Firestore状态")
+        if state is None: raise Exception("Failed to load Firestore state")
         state = normalize_trade_state(state)
         runtime_trend_universe = get_runtime_trend_universe(state)
         
-        # --- 资产核算与资金分配 ---
+        # --- Balances and allocation ---
         u_total = get_total_balance(client, 'USDT')
         bnb_total = get_total_balance(client, BNB_FUEL_ASSET)
         bnb_price = float(client.get_avg_price(symbol=BNB_FUEL_SYMBOL)['price'])
         
-        # 🎯 动态计算 USDT 现货储备水位 (总资金的5%，最低50U，最高300U)
+        # USDT spot buffer: 5% of equity, clamp 50–300
         dynamic_usdt_buffer = max(50.0, min(u_total * 0.05, 300.0))
-        
-        # BNB 自动补仓
+
+        # BNB auto top-up for fees
         if bnb_total * bnb_price < MIN_BNB_VALUE and u_total >= BUY_BNB_AMOUNT:
             ensure_asset_available(client, 'USDT', BUY_BNB_AMOUNT, tg_token, tg_chat_id)
             try:
@@ -883,7 +882,7 @@ def main():
                 log_buffer.append(f"🔧 BNB 自动补仓完成")
             except Exception as e: send_tg_msg(tg_token, tg_chat_id, f"⚠️ BNB补仓失败: {e}")
 
-        # 虚拟账本：资金池划分
+        # Virtual ledger: prices and balances
         prices, balances = {}, {}
         trend_val = 0.0
         for sym, cfg in runtime_trend_universe.items():
@@ -900,8 +899,7 @@ def main():
         fuel_val = bnb_total * bnb_price
         btc_snapshot = fetch_btc_market_snapshot(client, btc_p, log_buffer=log_buffer)
         if btc_snapshot is None:
-            # 数据明显不完整时，直接抛异常，让 GitHub / Telegram 都能感知到错误
-            raise Exception("BTC 指标数据不足，无法执行轮动与定投策略")
+            raise Exception("BTC indicators insufficient for rotation and DCA")
 
         trend_indicators = {}
         for symbol in TREND_UNIVERSE:
@@ -923,7 +921,7 @@ def main():
         dca_usdt_pool = max(0, min(u_total - trend_usdt_pool, (total_equity * btc_target_ratio) - dca_val))
         trend_layer_equity = trend_val + trend_usdt_pool
         
-        # --- 每日熔断判定 ---
+        # --- Daily circuit breaker ---
         now_utc = datetime.now(timezone.utc)
         today_utc = now_utc.strftime("%Y-%m-%d")
         today_id_str = now_utc.strftime("%Y%m%d")
@@ -990,7 +988,7 @@ def main():
         log_buffer.append(f"🧪 稳健质量排名: {ranking_preview}")
         log_buffer.append(f"🎯 轮动候选: {selected_text}")
 
-        # --- 趋势策略（月更稳健质量池 + 相对 BTC 强弱轮动）---
+        # --- Trend: monthly pool + relative-BTC rotation ---
         for symbol, config in runtime_trend_universe.items():
             curr_price = prices[symbol]
             indicators = trend_indicators.get(symbol)
@@ -999,17 +997,17 @@ def main():
             if st['is_holding']:
                 sell_reason = ""
                 if not indicators:
-                    sell_reason = "指标数据不足"
+                    sell_reason = "Missing indicators"
                 else:
                     st['highest_price'] = max(st['highest_price'], curr_price)
                     stop_p = st['highest_price'] - (ATR_MULTIPLIER * indicators['atr14'])
                 if symbol not in selected_candidates and not sell_reason:
-                    sell_reason = "轮动调仓移出候选池"
-                elif indicators and curr_price < indicators['sma60']: sell_reason = "跌破SMA60均线"
-                elif indicators and curr_price < stop_p: sell_reason = f"触发ATR移动止盈线(${stop_p:.2f})"
-                
+                    sell_reason = "Rotated out of candidates"
+                elif indicators and curr_price < indicators['sma60']: sell_reason = "Below SMA60"
+                elif indicators and curr_price < stop_p: sell_reason = f"ATR trailing stop (${stop_p:.2f})"
+
                 if sell_reason:
-                    sell_order_id = f"T_SELL_{symbol}_{int(time.time())}" # 引入时间戳保证唯一
+                    sell_order_id = f"T_SELL_{symbol}_{int(time.time())}"
                     try:
                         tradable_qty = balances[symbol]
                         qty = format_qty(client, symbol, tradable_qty)
@@ -1044,9 +1042,9 @@ def main():
                     buy_u = trend_usdt_pool * candidate_meta['weight']
 
                     if buy_u > 15:
-                        buy_order_id = f"T_BUY_{symbol}_{int(time.time())}" # 引入时间戳保证唯一
+                        buy_order_id = f"T_BUY_{symbol}_{int(time.time())}"
                         try:
-                            qty = format_qty(client, symbol, buy_u*0.985/curr_price) # 修复精度问题
+                            qty = format_qty(client, symbol, buy_u*0.985/curr_price)
                             usdt_cost = qty * curr_price
                             ensure_asset_available(client, 'USDT', usdt_cost, tg_token, tg_chat_id)
                             client.order_market_buy(symbol=symbol, quantity=qty, newClientOrderId=buy_order_id)
@@ -1091,7 +1089,7 @@ def main():
             else 0
         )
 
-        # --- BTC 定投策略 ---
+        # --- BTC DCA ---
         if dca_usdt_pool > 10 or dca_val > 10:
             ahr = btc_snapshot['ahr999']
             z = btc_snapshot['zscore']
@@ -1104,21 +1102,21 @@ def main():
             elif ahr < 0.8: multiplier = 2
             elif ahr < 1.2: multiplier = 1
             
-            # 利用 Firestore 状态管理拦截同一天的定投买入
+            # At most one DCA buy per day (Firestore)
             if multiplier > 0 and dca_usdt_pool > 15 and state.get('dca_last_buy_date') != today_id_str:
                 dca_buy_id = f"D_BUY_BTC_{int(time.time())}"
                 try:
-                    q = format_qty(client, 'BTCUSDT', min(dca_usdt_pool, base*multiplier)*0.985/btc_p) # 🚀 修复精度问题
+                    q = format_qty(client, 'BTCUSDT', min(dca_usdt_pool, base*multiplier)*0.985/btc_p)
                     ensure_asset_available(client, 'USDT', q * btc_p, tg_token, tg_chat_id)
                     client.order_market_buy(symbol='BTCUSDT', quantity=q, newClientOrderId=dca_buy_id)
                     balances['BTCUSDT'] += q
                     u_total -= q * btc_p
-                    state['dca_last_buy_date'] = today_id_str # 记录今天已买入
+                    state['dca_last_buy_date'] = today_id_str
                     send_tg_msg(tg_token, tg_chat_id, f"🛡️ [定投建仓] BTC 买入\nAhr999: {ahr:.2f}\n目标仓位: {btc_target_ratio:.1%}\n数量: {q} BTC")
                 except BinanceAPIException as e:
                     pass
             
-            # 利用 Firestore 状态管理拦截同一天的定投卖出
+            # At most one DCA sell per day (Firestore)
             if z > sell_trigger and dca_val > 20 and state.get('dca_last_sell_date') != today_id_str:
                 dca_sell_id = f"D_SELL_BTC_{int(time.time())}"
                 try:
@@ -1126,20 +1124,20 @@ def main():
                     if z > 4.0: sell_pct = 0.3
                     if z > 5.0: sell_pct = 0.5
                     
-                    q = format_qty(client, 'BTCUSDT', balances['BTCUSDT']*sell_pct) # 🚀 修复精度问题
+                    q = format_qty(client, 'BTCUSDT', balances['BTCUSDT']*sell_pct)
                     ensure_asset_available(client, 'BTC', q, tg_token, tg_chat_id)
                     client.order_market_sell(symbol='BTCUSDT', quantity=q, newClientOrderId=dca_sell_id)
                     balances['BTCUSDT'] = max(0.0, balances['BTCUSDT'] - q)
                     u_total += q * btc_p
-                    state['dca_last_sell_date'] = today_id_str # 记录今天已卖出
+                    state['dca_last_sell_date'] = today_id_str
                     send_tg_msg(tg_token, tg_chat_id, f"💰 [定投止盈] BTC 逃顶\n比例: {sell_pct*100}%\n数量: {q} BTC")
                 except BinanceAPIException as e:
                     pass
 
-        # --- 执行资金管家理财水位维护 ---
+        # --- USDT earn buffer ---
         manage_usdt_earn_buffer(client, dynamic_usdt_buffer, tg_token, tg_chat_id, log_buffer)
 
-        # --- 定时发送 BTC 指标心跳 ---
+        # --- Periodic BTC status report ---
         maybe_send_periodic_btc_status_report(
             state,
             tg_token,
@@ -1154,7 +1152,6 @@ def main():
             btc_target_ratio,
         )
 
-        # 保存最新状态
         set_trade_state(state)
 
     except Exception as e:
