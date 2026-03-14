@@ -264,6 +264,10 @@ def build_release_payloads(index_table: pd.DataFrame, base_dir: Path) -> list[di
         with live_pool_path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
         enriched_payload = dict(payload)
+        enriched_payload["_profile"] = row.get("profile", payload.get("profile"))
+        enriched_payload["_source_track"] = row.get("source_track", payload.get("source_track"))
+        enriched_payload["_candidate_status"] = row.get("candidate_status", payload.get("candidate_status"))
+        enriched_payload["_expected_pool_size"] = row.get("expected_pool_size", payload.get("expected_pool_size"))
         enriched_payload["_release_regime"] = row.get("regime")
         enriched_payload["_release_regime_confidence"] = row.get("regime_confidence")
         enriched_payload["_activation_date"] = str(pd.Timestamp(row["activation_date"]).date())
@@ -396,6 +400,10 @@ def run_shadow_replay(
                 "release_as_of_date": payload.get("as_of_date", ""),
                 "release_activation_date": payload.get("_activation_date", ""),
                 "release_version": payload.get("version", ""),
+                "profile": payload.get("_profile") or payload.get("profile", ""),
+                "source_track": payload.get("_source_track") or payload.get("source_track", ""),
+                "candidate_status": payload.get("_candidate_status") or payload.get("candidate_status", ""),
+                "expected_pool_size": payload.get("_expected_pool_size") or payload.get("expected_pool_size", ""),
                 "release_regime": payload.get("_release_regime"),
                 "release_regime_confidence": payload.get("_release_regime_confidence"),
                 "release_age_days": payload.get("_release_age_days"),
@@ -432,12 +440,25 @@ def run_shadow_replay(
         )
         detail_table["period_month"] = detail_table["effective_date"].dt.to_period("M").astype(str)
     source_mix = detail_table["source_kind"].value_counts(normalize=True).to_dict() if not detail_table.empty else {}
+    track_profile = str(index_table["profile"].dropna().iloc[0]) if "profile" in index_table.columns and index_table["profile"].notna().any() else ""
+    source_track = str(index_table["source_track"].dropna().iloc[0]) if "source_track" in index_table.columns and index_table["source_track"].notna().any() else ""
+    candidate_status = str(index_table["candidate_status"].dropna().iloc[0]) if "candidate_status" in index_table.columns and index_table["candidate_status"].notna().any() else ""
+    expected_pool_values = (
+        pd.to_numeric(index_table["expected_pool_size"], errors="coerce").dropna()
+        if "expected_pool_size" in index_table.columns
+        else pd.Series(dtype=float)
+    )
+    expected_pool_size = int(expected_pool_values.iloc[0]) if not expected_pool_values.empty else np.nan
     summary_row = {
         "run_name": release_index_path.parent.name,
         "release_index_path": str(release_index_path),
         "artifacts_root": str(base_dir),
         "signal_dates": int(len(detail_table)),
         "release_count": int(len(index_table)),
+        "track_profile": track_profile,
+        "source_track": source_track,
+        "candidate_status": candidate_status,
+        "expected_pool_size": expected_pool_size,
         "activation_lag_days": int(activation_lag_days) if activation_lag_days is not None else np.nan,
         "cost_bps": float(max(0.0, cost_bps)),
         "drop_every_nth_release": int(max(0, drop_every_nth_release)),

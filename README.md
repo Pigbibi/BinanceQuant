@@ -9,6 +9,7 @@ Automated crypto quant for Binance spot: BTC DCA core plus altcoin trend rotatio
 - **main.py** — Live script (run hourly).
 - **shadow_replay.py** — Local end-to-end shadow replay for the trend sleeve using historical upstream artifacts.
 - **run_challenger_robustness.py** — Additive robustness runner for baseline vs challenger shadow-replay comparisons.
+- **run_shadow_candidate_monitor.py** — Dual-track shadow monitor for the official baseline and the `challenger_topk_60` candidate.
 - **requirements.txt** — Python deps.
 
 ## Strategy Overview
@@ -205,12 +206,31 @@ For challenger robustness work, the repo also includes a matrix runner that comp
 python3 run_challenger_robustness.py
 ```
 
+For the ongoing shadow-production candidate workflow, use the dedicated dual-track monitor:
+
+```bash
+python3 run_shadow_candidate_monitor.py
+```
+
 ## Notes
 
 - The upstream CryptoLeaderRotation project is the primary selector and contract owner for the monthly live pool.
 - Local stable-quality pool ranking logic in this repo remains as a runtime fallback and execution convenience, not the preferred healthy input.
 - `shadow_replay.py` is the additive end-to-end research path for the downstream trend sleeve. It uses historical upstream shadow-release artifacts plus local daily price history; it does not require live Firestore or Binance connectivity.
 - `run_challenger_robustness.py` is research-only. It does not change live defaults; it exists to test whether a challenger advantage is broad, lag-tolerant, and resilient to mild friction or missing monthly releases.
+- `run_shadow_candidate_monitor.py` is shadow-only. Real execution still references the official baseline track; the challenger candidate is loaded only for paper comparison and must never drive orders.
+
+## Shadow Candidate Gates
+
+The current `challenger_topk_60` track is a shadow-production candidate, not a live switch.
+
+Before any future controlled production trial, the candidate should keep clearing all of these:
+
+- sustained outperformance versus the baseline over a new forward observation window
+- excess returns that are not overly concentrated in a few months or releases
+- acceptable lag and friction sensitivity
+- no major deterioration in risk-off behavior
+- no operational ambiguity about track identity, freshness, or shadow-only isolation
 
 ## Telegram
 
