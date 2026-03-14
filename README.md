@@ -314,6 +314,7 @@ The briefing package is reporting-only:
 - `challenger_topk_60` remains shadow-only
 - no production switch is implied
 - `monthly_chatgpt_prompt.md` is designed to be pasted into ChatGPT for interpretation
+- no separate monthly AI Telegram channel is added in this repo
 
 ## Telegram
 
