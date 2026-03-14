@@ -110,6 +110,63 @@ class ShadowCandidateMonitorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_shadow_candidate_monitor.validate_track_identity(summary_table)
 
+    def test_derive_sensitivity_status_flags_positive_lag_and_friction(self):
+        sensitivity_summary = pd.DataFrame(
+            [
+                {"scenario": "lag_1", "delta_cagr": 0.10, "delta_sharpe": 0.20},
+                {"scenario": "lag_3", "delta_cagr": 0.08, "delta_sharpe": 0.15},
+                {"scenario": "cost_10bps", "delta_cagr": 0.06, "delta_sharpe": 0.10},
+                {"scenario": "cost_20bps", "delta_cagr": 0.04, "delta_sharpe": 0.05},
+            ]
+        )
+
+        status = run_shadow_candidate_monitor.derive_sensitivity_status(sensitivity_summary)
+
+        self.assertEqual(status["lag_sensitivity_status"], "pass")
+        self.assertEqual(status["friction_sensitivity_status"], "pass")
+        self.assertTrue(status["gate_lag_sensitivity_ok"])
+        self.assertTrue(status["gate_friction_sensitivity_ok"])
+
+    def test_recommend_shadow_candidate_returns_continue_observation_for_mixed_recent_breadth(self):
+        recommendation = run_shadow_candidate_monitor.recommend_shadow_candidate(
+            {
+                "challenger_cagr": 0.30,
+                "baseline_cagr": 0.05,
+                "challenger_sharpe": 0.80,
+                "baseline_sharpe": 0.35,
+                "gate_risk_off_not_worse": True,
+                "gate_concentration_not_extreme": True,
+                "gate_lag_sensitivity_ok": True,
+                "gate_friction_sensitivity_ok": True,
+                "gate_recent_12_positive": True,
+                "gate_recent_6_releases_positive": True,
+                "recent_12_month_outperformance_rate": 0.33,
+                "recent_6_month_outperformance_rate": 0.17,
+            }
+        )
+
+        self.assertEqual(recommendation, "continue observation")
+
+    def test_recommend_shadow_candidate_returns_controlled_trial_candidate_for_strong_watchlist(self):
+        recommendation = run_shadow_candidate_monitor.recommend_shadow_candidate(
+            {
+                "challenger_cagr": 0.30,
+                "baseline_cagr": 0.05,
+                "challenger_sharpe": 0.80,
+                "baseline_sharpe": 0.35,
+                "gate_risk_off_not_worse": True,
+                "gate_concentration_not_extreme": True,
+                "gate_lag_sensitivity_ok": True,
+                "gate_friction_sensitivity_ok": True,
+                "gate_recent_12_positive": True,
+                "gate_recent_6_releases_positive": True,
+                "recent_12_month_outperformance_rate": 0.67,
+                "recent_6_month_outperformance_rate": 0.67,
+            }
+        )
+
+        self.assertEqual(recommendation, "candidate for future controlled trial")
+
 
 if __name__ == "__main__":
     unittest.main()
