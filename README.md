@@ -8,6 +8,7 @@ Automated crypto quant for Binance spot: BTC DCA core plus altcoin trend rotatio
 
 - **main.py** — Live script (run hourly).
 - **shadow_replay.py** — Local end-to-end shadow replay for the trend sleeve using historical upstream artifacts.
+- **run_challenger_robustness.py** — Additive robustness runner for baseline vs challenger shadow-replay comparisons.
 - **requirements.txt** — Python deps.
 
 ## Strategy Overview
@@ -198,11 +199,18 @@ To replay the downstream trend sleeve against locally generated upstream shadow 
 python3 shadow_replay.py --release-index ../CryptoLeaderRotation/data/output/shadow_releases/release_index.csv --name baseline
 ```
 
+For challenger robustness work, the repo also includes a matrix runner that compares baseline and challenger release histories across activation-lag, friction, and missing-release stress cases:
+
+```bash
+python3 run_challenger_robustness.py
+```
+
 ## Notes
 
 - The upstream CryptoLeaderRotation project is the primary selector and contract owner for the monthly live pool.
 - Local stable-quality pool ranking logic in this repo remains as a runtime fallback and execution convenience, not the preferred healthy input.
 - `shadow_replay.py` is the additive end-to-end research path for the downstream trend sleeve. It uses historical upstream shadow-release artifacts plus local daily price history; it does not require live Firestore or Binance connectivity.
+- `run_challenger_robustness.py` is research-only. It does not change live defaults; it exists to test whether a challenger advantage is broad, lag-tolerant, and resilient to mild friction or missing monthly releases.
 
 ## Telegram
 

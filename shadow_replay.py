@@ -37,6 +37,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-date", default=None, help="Optional replay start date.")
     parser.add_argument("--end-date", default=None, help="Optional replay end date.")
     parser.add_argument("--max-age-days", type=int, default=45, help="Freshness window for upstream artifacts.")
+    parser.add_argument(
+        "--activation-lag-days",
+        type=int,
+        default=None,
+        help="Optional override for release activation lag in trading days relative to as_of_date.",
+    )
+    parser.add_argument(
+        "--cost-bps",
+        type=float,
+        default=0.0,
+        help="Turnover-scaled transaction cost in basis points applied to daily weight changes.",
+    )
+    parser.add_argument(
+        "--drop-every-nth-release",
+        type=int,
+        default=0,
+        help="Optional deterministic stress case: drop every Nth monthly release before replay.",
+    )
+    parser.add_argument(
+        "--drop-phase",
+        type=int,
+        default=0,
+        help="Zero-based phase offset used with --drop-every-nth-release.",
+    )
     parser.add_argument("--soft-tilt-field", default=None, help="Optional upstream selection_meta field for soft tilt.")
     parser.add_argument("--soft-tilt-strength", type=float, default=0.15, help="Bounded soft-tilt strength.")
     return parser.parse_args()
@@ -58,6 +82,50 @@ def load_release_index(path: Path | str) -> pd.DataFrame:
     frame["as_of_date"] = pd.to_datetime(frame["as_of_date"]).dt.normalize()
     frame["activation_date"] = pd.to_datetime(frame["activation_date"]).dt.normalize()
     return frame.sort_values(["activation_date", "as_of_date"]).reset_index(drop=True)
+
+
+def next_trading_date(trading_dates: pd.DatetimeIndex, anchor_date: pd.Timestamp, lag_days: int) -> pd.Timestamp:
+    normalized_dates = pd.DatetimeIndex(pd.to_datetime(trading_dates)).sort_values().unique()
+    anchor = pd.Timestamp(anchor_date).normalize()
+    eligible = normalized_dates[normalized_dates >= anchor]
+    if len(eligible) == 0:
+        return anchor
+    offset = max(0, min(int(lag_days), len(eligible) - 1))
+    return pd.Timestamp(eligible[offset]).normalize()
+
+
+def override_activation_lag(
+    index_table: pd.DataFrame,
+    trading_dates: pd.DatetimeIndex,
+    lag_days: int,
+) -> pd.DataFrame:
+    adjusted = index_table.copy()
+    adjusted["activation_date"] = adjusted["as_of_date"].apply(
+        lambda date: next_trading_date(trading_dates, pd.Timestamp(date), lag_days)
+    )
+    return adjusted.sort_values(["activation_date", "as_of_date"]).reset_index(drop=True)
+
+
+def drop_release_rows(index_table: pd.DataFrame, every_nth: int = 0, phase: int = 0) -> pd.DataFrame:
+    if every_nth <= 0 or index_table.empty:
+        return index_table.copy()
+    normalized_phase = int(phase) % int(every_nth)
+    positions = np.arange(len(index_table))
+    keep_mask = (positions % int(every_nth)) != normalized_phase
+    return index_table.loc[keep_mask].reset_index(drop=True)
+
+
+def apply_turnover_costs(
+    gross_returns: pd.Series,
+    turnover: pd.Series,
+    cost_bps: float,
+) -> tuple[pd.Series, pd.Series]:
+    gross_returns = gross_returns.astype(float)
+    turnover = turnover.reindex(gross_returns.index).fillna(0.0).astype(float)
+    unit_cost = max(0.0, float(cost_bps)) / 10000.0
+    transaction_cost = turnover * unit_cost
+    net_returns = gross_returns - transaction_cost
+    return net_returns, transaction_cost
 
 
 def load_daily_history(raw_dir: Path | str, symbol: str) -> pd.DataFrame:
@@ -146,13 +214,19 @@ def resolve_active_release(signal_date: pd.Timestamp, releases: list[dict[str, A
             "as_of_date": "",
             "mode": "static",
             "source_project": "BinanceQuant",
+            "_release_regime": None,
+            "_release_regime_confidence": None,
+            "_release_age_days": None,
+            "_activation_date": "",
         }, "static"
 
     latest = eligible[-1]
     age_days = int((signal_date - latest["as_of_date"]).days)
+    payload = dict(latest["payload"])
+    payload["_release_age_days"] = age_days
     if age_days <= max_age_days:
-        return latest["payload"], "fresh_upstream"
-    return latest["payload"], "last_known_good"
+        return payload, "fresh_upstream"
+    return payload, "last_known_good"
 
 
 def compute_performance_metrics(returns: pd.Series, turnover: pd.Series | None = None) -> dict[str, float]:
@@ -189,12 +263,16 @@ def build_release_payloads(index_table: pd.DataFrame, base_dir: Path) -> list[di
         live_pool_path = base_dir / str(row["live_pool_path"])
         with live_pool_path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
+        enriched_payload = dict(payload)
+        enriched_payload["_release_regime"] = row.get("regime")
+        enriched_payload["_release_regime_confidence"] = row.get("regime_confidence")
+        enriched_payload["_activation_date"] = str(pd.Timestamp(row["activation_date"]).date())
         releases.append(
             {
                 "version": str(row["version"]),
                 "as_of_date": pd.Timestamp(row["as_of_date"]).normalize(),
                 "activation_date": pd.Timestamp(row["activation_date"]).normalize(),
-                "payload": payload,
+                "payload": enriched_payload,
             }
         )
     return releases
@@ -206,18 +284,22 @@ def run_shadow_replay(
     artifacts_root: Path | None,
     raw_dir: Path,
     max_age_days: int,
+    activation_lag_days: int | None = None,
+    cost_bps: float = 0.0,
+    drop_every_nth_release: int = 0,
+    drop_phase: int = 0,
     soft_tilt_field: str | None = None,
     soft_tilt_strength: float = 0.15,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     index_table = load_release_index(release_index_path)
+    index_table = drop_release_rows(index_table, every_nth=drop_every_nth_release, phase=drop_phase)
     base_dir = artifacts_root or release_index_path.parent
-    releases = build_release_payloads(index_table, base_dir)
 
     release_symbols = set()
-    for release in releases:
-        release_symbols.update(release["payload"].get("symbols", []))
+    for raw_symbols in index_table.get("symbols", pd.Series(dtype=str)).fillna(""):
+        release_symbols.update(symbol for symbol in str(raw_symbols).split("|") if symbol)
     symbols = sorted(release_symbols | set(strategy.STATIC_TREND_UNIVERSE.keys()) | {"BTCUSDT"})
 
     histories = {symbol: load_daily_history(raw_dir, symbol) for symbol in symbols}
@@ -239,6 +321,10 @@ def run_shadow_replay(
         dates = dates[dates <= pd.Timestamp(end_date).normalize()]
     if len(dates) < 3:
         raise ValueError("Not enough overlapping dates for shadow replay.")
+
+    if activation_lag_days is not None:
+        index_table = override_activation_lag(index_table, dates, activation_lag_days)
+    releases = build_release_payloads(index_table, base_dir)
 
     returns_matrix = compute_open_to_open_returns(histories, dates)
     signal_dates = list(dates[:-1])
@@ -308,7 +394,11 @@ def run_shadow_replay(
                 "effective_date": effective_date,
                 "source_kind": source_kind,
                 "release_as_of_date": payload.get("as_of_date", ""),
+                "release_activation_date": payload.get("_activation_date", ""),
                 "release_version": payload.get("version", ""),
+                "release_regime": payload.get("_release_regime"),
+                "release_regime_confidence": payload.get("_release_regime_confidence"),
+                "release_age_days": payload.get("_release_age_days"),
                 "pool_symbols": "|".join(candidate_pool),
                 "selected_symbols": "|".join(symbol for symbol, weight in current_weights.items() if weight > 0),
                 "selected_weights": "|".join(
@@ -320,18 +410,45 @@ def run_shadow_replay(
             }
         )
 
-    returns = (weight_matrix * returns_matrix.reindex(weight_matrix.index).fillna(0.0)).sum(axis=1)
-    metrics = compute_performance_metrics(returns, turnover=turnover_series)
+    gross_returns = (weight_matrix * returns_matrix.reindex(weight_matrix.index).fillna(0.0)).sum(axis=1)
+    net_returns, transaction_cost = apply_turnover_costs(gross_returns, turnover_series, cost_bps=cost_bps)
+    metrics = compute_performance_metrics(net_returns, turnover=turnover_series)
+    gross_metrics = compute_performance_metrics(gross_returns, turnover=turnover_series)
     detail_table = pd.DataFrame(detail_rows)
+    if not detail_table.empty:
+        detail_table["signal_date"] = pd.to_datetime(detail_table["signal_date"]).dt.normalize()
+        detail_table["effective_date"] = pd.to_datetime(detail_table["effective_date"]).dt.normalize()
+        detail_table = detail_table.merge(
+            pd.DataFrame(
+                {
+                    "effective_date": net_returns.index,
+                    "gross_return": gross_returns.values,
+                    "transaction_cost": transaction_cost.values,
+                    "net_return": net_returns.values,
+                }
+            ),
+            on="effective_date",
+            how="left",
+        )
+        detail_table["period_month"] = detail_table["effective_date"].dt.to_period("M").astype(str)
     source_mix = detail_table["source_kind"].value_counts(normalize=True).to_dict() if not detail_table.empty else {}
     summary_row = {
         "run_name": release_index_path.parent.name,
         "release_index_path": str(release_index_path),
         "artifacts_root": str(base_dir),
         "signal_dates": int(len(detail_table)),
+        "release_count": int(len(index_table)),
+        "activation_lag_days": int(activation_lag_days) if activation_lag_days is not None else np.nan,
+        "cost_bps": float(max(0.0, cost_bps)),
+        "drop_every_nth_release": int(max(0, drop_every_nth_release)),
+        "drop_phase": int(max(0, drop_phase)),
         "soft_tilt_field": soft_tilt_field or "",
         "soft_tilt_strength": float(soft_tilt_strength if soft_tilt_field else 0.0),
         **metrics,
+        "gross_cagr": float(gross_metrics["CAGR"]),
+        "gross_sharpe": float(gross_metrics["Sharpe"]),
+        "gross_max_drawdown": float(gross_metrics["Max Drawdown"]),
+        "annualized_cost_drag": float(transaction_cost.mean() * 365.0) if len(transaction_cost) else 0.0,
         "fresh_upstream_pct": float(source_mix.get("fresh_upstream", 0.0)),
         "last_known_good_pct": float(source_mix.get("last_known_good", 0.0)),
         "static_pct": float(source_mix.get("static", 0.0)),
@@ -349,6 +466,10 @@ def main_cli() -> None:
         artifacts_root=Path(args.artifacts_root).resolve() if args.artifacts_root else None,
         raw_dir=Path(args.raw_dir).resolve(),
         max_age_days=max(0, int(args.max_age_days)),
+        activation_lag_days=args.activation_lag_days,
+        cost_bps=float(args.cost_bps),
+        drop_every_nth_release=max(0, int(args.drop_every_nth_release)),
+        drop_phase=max(0, int(args.drop_phase)),
         soft_tilt_field=args.soft_tilt_field,
         soft_tilt_strength=float(args.soft_tilt_strength),
         start_date=args.start_date,
