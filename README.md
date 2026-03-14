@@ -2,12 +2,11 @@
 
 Automated crypto quant for Binance spot: BTC DCA core plus altcoin trend rotation. Uses valuation (AHR999, Z-Score) and trend gates (MA200, slope). Compatible with Binance flexible earn (auto redeem/subscribe), USDT buffer, BNB fuel, Telegram alerts, and Firestore state.
 
-**Trend universe source:** Prefer upstream published pool (e.g. CryptoLeaderRotation) via Firestore or `live_pool_legacy.json`. Fallback: built-in static pool.
+**Trend universe source:** Prefer the upstream published pool from CryptoLeaderRotation. This repo now validates upstream payload freshness and contract shape before using it, keeps a last known good upstream payload in state, and only reaches static fallback as an explicit degraded last resort.
 
 ## Layout
 
 - **main.py** — Live script (run hourly).
-- **backtest.py** — Research/backtest (pool selection, ranking, risk).
 - **requirements.txt** — Python deps.
 
 ## Strategy Overview
@@ -29,7 +28,7 @@ Runs hourly; signals are daily trend and risk, not high-frequency.
 
 ## Trend Rotation
 
-**Universe:** From upstream (Firestore or `live_pool_legacy.json`) or static fallback. Priority: Firestore → `TREND_POOL_FILE` → default paths → static pool.
+**Universe:** Prefer the upstream live pool. Source hierarchy is: fresh upstream Firestore payload → last known good upstream payload from state → validated local upstream file fallback → static universe emergency fallback.
 
 **Monthly pool:** Upstream publishes a 5-coin production pool; this repo consumes it. “Stable quality” favours: stable trend structure, relative BTC strength, liquidity, low liquidity variance, trend persistence.
 
@@ -61,23 +60,47 @@ Runs hourly; signals are daily trend and risk, not high-frequency.
 **Default:** CryptoLeaderRotation monthly output.
 
 1. Firestore `strategy` / `CRYPTO_LEADER_ROTATION_LIVE_POOL` (override: `TREND_POOL_FIRESTORE_COLLECTION`, `TREND_POOL_FIRESTORE_DOCUMENT`).
-2. Local `live_pool_legacy.json` (override: `TREND_POOL_FILE`).
-3. Static `TREND_UNIVERSE`.
+2. Last known good upstream payload persisted in Firestore state after a successful accepted upstream read.
+3. Local `live_pool_legacy.json` or `live_pool.json` style file (override: `TREND_POOL_FILE`).
+4. Static `TREND_UNIVERSE` as emergency fallback only.
 
-**Format (`live_pool_legacy.json`):**
+**Stable upstream contract fields:**
+
+- `as_of_date`
+- `version`
+- `mode`
+- `pool_size`
+- `symbols`
+- `symbol_map`
+- `source_project`
+
+**Accepted legacy-compatible format (`live_pool_legacy.json`):**
 
 ```json
 {
   "as_of_date": "2026-03-13",
+  "version": "2026-03-13-core_major",
+  "mode": "core_major",
   "pool_size": 5,
   "symbols": {
     "TRXUSDT": {"base_asset": "TRX"},
     "ETHUSDT": {"base_asset": "ETH"}
-  }
+  },
+  "symbol_map": {
+    "TRXUSDT": {"base_asset": "TRX"},
+    "ETHUSDT": {"base_asset": "ETH"}
+  },
+  "source_project": "crypto-leader-rotation"
 }
 ```
 
-**Runtime:** Active pool drives new buys; retired symbols stay in state until sold. On pool load failure, fallback to static pool.
+**Validation and degraded mode:**
+
+- Upstream payloads must have a non-empty symbol set, a parseable `as_of_date`, and an acceptable `mode`.
+- Freshness is validated with `TREND_POOL_MAX_AGE_DAYS` against the upstream `as_of_date`.
+- If the fresh upstream payload is stale or malformed, the runtime does not silently treat weaker fallbacks as equivalent.
+- In degraded mode, the script prefers the last known good upstream payload, then a validated local file fallback, and pauses new trend buys by default unless `TREND_POOL_ALLOW_NEW_ENTRIES_ON_DEGRADED=1`.
+- Retired symbols stay in state until sold; active pool changes are source-tagged in state for auditability.
 
 ## Environment
 
@@ -99,6 +122,10 @@ Optional:
 | `TREND_POOL_FILE` | Path to `live_pool_legacy.json` |
 | `TREND_POOL_FIRESTORE_COLLECTION` | Firestore collection for live pool (default `strategy`) |
 | `TREND_POOL_FIRESTORE_DOCUMENT` | Firestore document for live pool (default `CRYPTO_LEADER_ROTATION_LIVE_POOL`) |
+| `TREND_POOL_MAX_AGE_DAYS` | Max allowed age for upstream `as_of_date` before payload is treated as stale (default `45`) |
+| `TREND_POOL_ACCEPTABLE_MODES` | Comma-separated allowed upstream modes (default `core_major`) |
+| `TREND_POOL_EXPECTED_SIZE` | Expected upstream live-pool size for contract checks (default `5`) |
+| `TREND_POOL_ALLOW_NEW_ENTRIES_ON_DEGRADED` | Allow trend buys when running on last-known-good or fallback pool sources (default `false`) |
 
 ## Deploy (self-hosted runner + workflow)
 
@@ -158,13 +185,10 @@ export GOOGLE_APPLICATION_CREDENTIALS=/path/to/gcp-sa.json
 python main.py
 ```
 
-## Backtest
+## Notes
 
-```bash
-python3 backtest.py
-```
-
-Used to compare pool/ranking variants and event-window behaviour.
+- The upstream CryptoLeaderRotation project is the primary selector and contract owner for the monthly live pool.
+- Local stable-quality pool ranking logic in this repo remains as a runtime fallback and execution convenience, not the preferred healthy input.
 
 ## Telegram
 

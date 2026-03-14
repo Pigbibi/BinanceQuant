@@ -47,6 +47,12 @@ DEFAULT_LIVE_POOL_LEGACY_PATH = (
 DEFAULT_TREND_POOL_FIRESTORE_COLLECTION = "strategy"
 DEFAULT_TREND_POOL_FIRESTORE_DOCUMENT = "CRYPTO_LEADER_ROTATION_LIVE_POOL"
 RETIRED_TREND_POSITIONS_KEY = "retired_trend_positions"
+TREND_POOL_LAST_GOOD_PAYLOAD_KEY = "trend_pool_last_good_payload"
+TREND_POOL_ACTION_HISTORY_KEY = "trend_action_history"
+DEFAULT_TREND_POOL_MAX_AGE_DAYS = 45
+DEFAULT_TREND_POOL_ACCEPTABLE_MODES = ("core_major",)
+
+_FIRESTORE_CLIENT = None
 
 
 def get_env_int(name, default):
@@ -54,6 +60,20 @@ def get_env_int(name, default):
         return int(os.getenv(name, str(default)))
     except Exception:
         return int(default)
+
+
+def get_env_bool(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return bool(default)
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def get_env_csv(name, default_values):
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return list(default_values)
+    return [item.strip() for item in str(raw).split(",") if item.strip()]
 
 
 def default_trend_symbol_state():
@@ -95,27 +115,176 @@ def has_active_position(position_state):
     )
 
 
+def parse_trend_pool_date(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.strptime(value[:10], "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
 def parse_trend_universe_mapping(payload):
     if not isinstance(payload, dict):
         return {}
 
     symbols = payload.get("symbol_map")
-    if not isinstance(symbols, dict):
+    if not isinstance(symbols, (dict, list)):
         symbols = payload.get("symbols")
-    if not isinstance(symbols, dict):
+    if not isinstance(symbols, (dict, list)):
         return {}
 
     parsed = {}
-    for symbol, meta in symbols.items():
+    if isinstance(symbols, list):
+        symbol_items = ((symbol, {"base_asset": infer_base_asset(symbol)}) for symbol in symbols)
+    else:
+        symbol_items = symbols.items()
+
+    for symbol, meta in symbol_items:
         if not isinstance(symbol, str) or not symbol.endswith("USDT"):
             continue
         if not isinstance(meta, dict):
-            continue
-        base_asset = meta.get("base_asset")
-        if not isinstance(base_asset, str) or not base_asset:
+            meta = {"base_asset": infer_base_asset(symbol)}
+        base_asset = str(meta.get("base_asset") or infer_base_asset(symbol)).strip()
+        if not base_asset:
             continue
         parsed[symbol] = {"base_asset": base_asset}
     return parsed
+
+
+def extract_trend_pool_symbols(payload, symbol_map):
+    if not isinstance(payload, dict):
+        return list(symbol_map.keys())
+
+    raw_symbols = payload.get("symbols")
+    if isinstance(raw_symbols, list):
+        ordered = raw_symbols
+    elif isinstance(raw_symbols, dict):
+        ordered = list(raw_symbols.keys())
+    else:
+        ordered = list(symbol_map.keys())
+
+    deduped = []
+    seen = set()
+    for symbol in ordered:
+        if symbol in symbol_map and symbol not in seen:
+            deduped.append(symbol)
+            seen.add(symbol)
+    return deduped
+
+
+def get_trend_pool_contract_settings():
+    return {
+        "max_age_days": max(0, get_env_int("TREND_POOL_MAX_AGE_DAYS", DEFAULT_TREND_POOL_MAX_AGE_DAYS)),
+        "acceptable_modes": get_env_csv("TREND_POOL_ACCEPTABLE_MODES", DEFAULT_TREND_POOL_ACCEPTABLE_MODES),
+        "expected_pool_size": max(1, get_env_int("TREND_POOL_EXPECTED_SIZE", TREND_POOL_SIZE)),
+    }
+
+
+def validate_trend_pool_payload(
+    payload,
+    source_label,
+    *,
+    now_utc=None,
+    max_age_days=DEFAULT_TREND_POOL_MAX_AGE_DAYS,
+    acceptable_modes=None,
+    expected_pool_size=TREND_POOL_SIZE,
+    enforce_freshness=True,
+):
+    now_utc = now_utc or datetime.now(timezone.utc)
+    acceptable_modes = list(acceptable_modes or [])
+    symbol_map = parse_trend_universe_mapping(payload)
+    symbols = extract_trend_pool_symbols(payload, symbol_map)
+    errors = []
+    warnings = []
+
+    as_of_date = parse_trend_pool_date((payload or {}).get("as_of_date"))
+    if as_of_date is None:
+        errors.append("missing or invalid as_of_date")
+
+    mode = (payload or {}).get("mode")
+    if isinstance(mode, str):
+        mode = mode.strip()
+    else:
+        mode = ""
+    if not mode:
+        if acceptable_modes:
+            mode = acceptable_modes[0]
+            warnings.append(f"mode missing; assumed {mode}")
+    elif acceptable_modes and mode not in acceptable_modes:
+        errors.append(f"mode {mode} not in acceptable set {acceptable_modes}")
+
+    if not symbol_map:
+        errors.append("symbols/symbol_map missing or invalid")
+    if not symbols:
+        errors.append("symbols list is empty")
+
+    pool_size_value = (payload or {}).get("pool_size", len(symbols))
+    try:
+        pool_size = int(pool_size_value)
+    except Exception:
+        pool_size = len(symbols)
+        errors.append("pool_size missing or invalid")
+
+    if pool_size != len(symbols):
+        errors.append(f"pool_size mismatch: declared {pool_size} vs parsed {len(symbols)}")
+    if expected_pool_size and symbols and pool_size != int(expected_pool_size):
+        errors.append(f"pool_size {pool_size} does not match expected {int(expected_pool_size)}")
+
+    age_days = None
+    is_fresh = False
+    if as_of_date is not None:
+        age_days = (now_utc.date() - as_of_date).days
+        is_fresh = age_days <= int(max_age_days)
+        if age_days < 0:
+            errors.append(f"as_of_date {as_of_date.isoformat()} is in the future")
+        elif enforce_freshness and age_days > int(max_age_days):
+            errors.append(f"payload stale by {age_days} days (max {int(max_age_days)})")
+
+    version = (payload or {}).get("version")
+    if isinstance(version, str):
+        version = version.strip()
+    else:
+        version = ""
+    if not version and as_of_date is not None and mode:
+        version = f"{as_of_date.isoformat()}-{mode}"
+        warnings.append("version missing; synthesized from as_of_date and mode")
+
+    source_project = (payload or {}).get("source_project")
+    if isinstance(source_project, str):
+        source_project = source_project.strip()
+    else:
+        source_project = ""
+    if not source_project:
+        source_project = "unknown"
+        warnings.append("source_project missing; marked as unknown")
+
+    normalized_payload = {
+        "as_of_date": as_of_date.isoformat() if as_of_date is not None else "",
+        "version": version,
+        "mode": mode,
+        "pool_size": len(symbols),
+        "symbols": symbols,
+        "symbol_map": symbol_map,
+        "source_project": source_project,
+    }
+
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "source_label": str(source_label),
+        "payload": normalized_payload,
+        "symbol_map": symbol_map,
+        "symbols": symbols,
+        "pool_size": len(symbols),
+        "as_of_date": normalized_payload["as_of_date"],
+        "version": version,
+        "mode": mode,
+        "source_project": source_project,
+        "age_days": age_days,
+        "is_fresh": is_fresh,
+    }
 
 
 def get_default_live_pool_candidates():
@@ -139,71 +308,230 @@ def get_default_live_pool_candidates():
     return candidates
 
 
-def load_trend_universe_from_firestore():
+def get_firestore_client():
+    global _FIRESTORE_CLIENT
+    if _FIRESTORE_CLIENT is None:
+        _FIRESTORE_CLIENT = firestore.Client()
+    return _FIRESTORE_CLIENT
+
+
+def get_state_doc_ref():
+    return get_firestore_client().collection("strategy").document("MULTI_ASSET_STATE")
+
+
+def load_trend_pool_from_firestore(*, now_utc=None, settings=None):
     collection = os.getenv("TREND_POOL_FIRESTORE_COLLECTION", DEFAULT_TREND_POOL_FIRESTORE_COLLECTION)
     document = os.getenv("TREND_POOL_FIRESTORE_DOCUMENT", DEFAULT_TREND_POOL_FIRESTORE_DOCUMENT)
+    settings = settings or get_trend_pool_contract_settings()
+    source_label = f"firestore:{collection}/{document}"
 
     try:
-        payload = db.collection(collection).document(document).get()
+        payload = get_firestore_client().collection(collection).document(document).get()
         if not payload.exists:
-            print(f"Trend pool Firestore doc missing, trying local: {collection}/{document}")
-            return {}
+            return {
+                "ok": False,
+                "errors": [f"missing Firestore document {collection}/{document}"],
+                "warnings": [],
+                "source_label": source_label,
+            }
 
-        parsed = parse_trend_universe_mapping(payload.to_dict())
-        if not parsed:
-            print(f"Trend pool Firestore payload invalid, trying local: {collection}/{document}")
-            return {}
-
-        print(f"Loaded trend pool from Firestore: {collection}/{document} | symbols={','.join(parsed.keys())}")
-        return parsed
+        return validate_trend_pool_payload(
+            payload.to_dict(),
+            source_label=source_label,
+            now_utc=now_utc,
+            max_age_days=settings["max_age_days"],
+            acceptable_modes=settings["acceptable_modes"],
+            expected_pool_size=settings["expected_pool_size"],
+            enforce_freshness=True,
+        )
     except Exception as exc:
-        print(f"Firestore trend pool read failed, trying local: {exc}")
-        return {}
+        return {
+            "ok": False,
+            "errors": [f"Firestore read failed: {exc}"],
+            "warnings": [],
+            "source_label": source_label,
+        }
 
 
-def load_trend_universe_from_live_pool():
-    """Prefer the published live pool, but safely fall back to the static universe."""
-    configured_path = os.getenv("TREND_POOL_FILE")
-    fallback = STATIC_TREND_UNIVERSE.copy()
-
+def load_trend_pool_from_file(path, *, now_utc=None, settings=None):
+    settings = settings or get_trend_pool_contract_settings()
+    source_label = f"file:{path}"
     try:
-        if configured_path:
-            configured_pool_path = Path(configured_path).expanduser()
-            if not configured_pool_path.exists():
-                print(f"TREND_POOL_FILE not found, fallback to static: {configured_pool_path}")
-                return fallback
-
-            payload = json.loads(configured_pool_path.read_text(encoding="utf-8"))
-            parsed = parse_trend_universe_mapping(payload)
-            if not parsed:
-                print(f"TREND_POOL_FILE invalid, fallback to static: {configured_pool_path}")
-                return fallback
-
-            print(f"Loaded trend pool file: {configured_pool_path} | symbols={','.join(parsed.keys())}")
-            return parsed
-
-        firestore_pool = load_trend_universe_from_firestore()
-        if firestore_pool:
-            return firestore_pool
-
-        for pool_path in get_default_live_pool_candidates():
-            if not pool_path.exists():
-                continue
-
-            payload = json.loads(pool_path.read_text(encoding="utf-8"))
-            parsed = parse_trend_universe_mapping(payload)
-            if not parsed:
-                print(f"Pool file invalid, trying next: {pool_path}")
-                continue
-
-            print(f"Loaded trend pool file: {pool_path} | symbols={','.join(parsed.keys())}")
-            return parsed
-
-        print("No upstream trend pool found, using static TREND_UNIVERSE")
-        return fallback
+        pool_path = Path(path).expanduser()
+        if not pool_path.exists():
+            return {
+                "ok": False,
+                "errors": [f"pool file not found: {pool_path}"],
+                "warnings": [],
+                "source_label": source_label,
+            }
+        payload = json.loads(pool_path.read_text(encoding="utf-8"))
+        return validate_trend_pool_payload(
+            payload,
+            source_label=source_label,
+            now_utc=now_utc,
+            max_age_days=settings["max_age_days"],
+            acceptable_modes=settings["acceptable_modes"],
+            expected_pool_size=settings["expected_pool_size"],
+            enforce_freshness=True,
+        )
     except Exception as exc:
-        print(f"Trend pool load failed, using static: {exc}")
-        return fallback
+        return {
+            "ok": False,
+            "errors": [f"pool file read failed: {exc}"],
+            "warnings": [],
+            "source_label": source_label,
+        }
+
+
+def build_trend_pool_resolution(validated_payload, *, source_kind, degraded, now_utc=None, messages=None):
+    now_utc = now_utc or datetime.now(timezone.utc)
+    payload = dict(validated_payload["payload"])
+    return {
+        "source_kind": str(source_kind),
+        "source_label": validated_payload.get("source_label", source_kind),
+        "degraded": bool(degraded),
+        "is_fresh": bool(validated_payload.get("is_fresh", False)),
+        "messages": list(messages or []) + list(validated_payload.get("warnings", [])),
+        "errors": list(validated_payload.get("errors", [])),
+        "loaded_at": now_utc.isoformat(),
+        "payload": payload,
+        "symbol_map": payload["symbol_map"],
+        "symbols": payload["symbols"],
+        "pool_size": payload["pool_size"],
+        "as_of_date": payload["as_of_date"],
+        "version": payload["version"],
+        "mode": payload["mode"],
+        "source_project": payload["source_project"],
+    }
+
+
+def get_last_known_good_trend_pool(state, *, now_utc=None, settings=None):
+    settings = settings or get_trend_pool_contract_settings()
+    payload = {}
+    if isinstance(state, dict):
+        payload = state.get(TREND_POOL_LAST_GOOD_PAYLOAD_KEY, {})
+    return validate_trend_pool_payload(
+        payload,
+        source_label="state:last_known_good",
+        now_utc=now_utc,
+        max_age_days=settings["max_age_days"],
+        acceptable_modes=settings["acceptable_modes"],
+        expected_pool_size=settings["expected_pool_size"],
+        enforce_freshness=False,
+    )
+
+
+def build_static_trend_pool_resolution(*, now_utc=None, messages=None):
+    now_utc = now_utc or datetime.now(timezone.utc)
+    payload = {
+        "as_of_date": "",
+        "version": "static-fallback",
+        "mode": "static",
+        "pool_size": len(STATIC_TREND_UNIVERSE),
+        "symbols": list(STATIC_TREND_UNIVERSE.keys()),
+        "symbol_map": {symbol: meta.copy() for symbol, meta in STATIC_TREND_UNIVERSE.items()},
+        "source_project": "BinanceQuant",
+    }
+    return {
+        "source_kind": "static",
+        "source_label": "static:built_in",
+        "degraded": True,
+        "is_fresh": False,
+        "messages": list(messages or []),
+        "errors": [],
+        "loaded_at": now_utc.isoformat(),
+        "payload": payload,
+        "symbol_map": payload["symbol_map"],
+        "symbols": payload["symbols"],
+        "pool_size": payload["pool_size"],
+        "as_of_date": payload["as_of_date"],
+        "version": payload["version"],
+        "mode": payload["mode"],
+        "source_project": payload["source_project"],
+    }
+
+
+def resolve_trend_pool_source(state=None, *, now_utc=None):
+    """Resolve the upstream trend pool with explicit degraded-state fallbacks."""
+    now_utc = now_utc or datetime.now(timezone.utc)
+    settings = get_trend_pool_contract_settings()
+    messages = []
+
+    firestore_result = load_trend_pool_from_firestore(now_utc=now_utc, settings=settings)
+    if firestore_result.get("ok"):
+        resolution = build_trend_pool_resolution(
+            firestore_result,
+            source_kind="fresh_upstream",
+            degraded=False,
+            now_utc=now_utc,
+            messages=[f"Loaded fresh upstream trend pool from {firestore_result['source_label']}"],
+        )
+        return resolution
+    messages.extend(firestore_result.get("errors", []))
+    messages.extend(firestore_result.get("warnings", []))
+
+    last_good_result = get_last_known_good_trend_pool(state or {}, now_utc=now_utc, settings=settings)
+    if last_good_result.get("ok"):
+        return build_trend_pool_resolution(
+            last_good_result,
+            source_kind="last_known_good",
+            degraded=True,
+            now_utc=now_utc,
+            messages=messages + ["Using last known good upstream trend pool after fresh upstream validation failed."],
+        )
+    messages.extend(last_good_result.get("errors", []))
+
+    configured_path = os.getenv("TREND_POOL_FILE")
+    file_candidates = []
+    if configured_path:
+        file_candidates.append(Path(configured_path).expanduser())
+    file_candidates.extend(get_default_live_pool_candidates())
+
+    seen_candidates = set()
+    for pool_path in file_candidates:
+        pool_path = Path(pool_path)
+        if str(pool_path) in seen_candidates:
+            continue
+        seen_candidates.add(str(pool_path))
+
+        file_result = load_trend_pool_from_file(pool_path, now_utc=now_utc, settings=settings)
+        if file_result.get("ok"):
+            return build_trend_pool_resolution(
+                file_result,
+                source_kind="local_file",
+                degraded=True,
+                now_utc=now_utc,
+                messages=messages + [f"Using validated local trend pool fallback from {pool_path}"],
+            )
+        messages.extend(file_result.get("errors", []))
+        messages.extend(file_result.get("warnings", []))
+
+    return build_static_trend_pool_resolution(
+        now_utc=now_utc,
+        messages=messages + ["Falling back to built-in static trend universe as last resort."],
+    )
+
+
+def load_trend_universe_from_live_pool(state=None, *, now_utc=None):
+    resolution = resolve_trend_pool_source(state=state, now_utc=now_utc)
+    return resolution["symbol_map"], resolution
+
+
+def update_trend_pool_state(state, resolution):
+    state["trend_pool_source"] = str(resolution.get("source_kind", ""))
+    state["trend_pool_source_detail"] = str(resolution.get("source_label", ""))
+    state["trend_pool_is_fresh"] = bool(resolution.get("is_fresh", False))
+    state["trend_pool_degraded"] = bool(resolution.get("degraded", False))
+    state["trend_pool_as_of_date"] = str(resolution.get("as_of_date", ""))
+    state["trend_pool_version"] = str(resolution.get("version", ""))
+    state["trend_pool_mode"] = str(resolution.get("mode", ""))
+    state["trend_pool_source_project"] = str(resolution.get("source_project", ""))
+    state["trend_pool_loaded_at"] = str(resolution.get("loaded_at", ""))
+    state["trend_pool_messages"] = [str(message) for message in resolution.get("messages", [])]
+
+    if resolution.get("source_kind") in {"fresh_upstream", "local_file"}:
+        state[TREND_POOL_LAST_GOOD_PAYLOAD_KEY] = dict(resolution.get("payload", {}))
 
 
 def build_default_state():
@@ -218,6 +546,18 @@ def build_default_state():
         "rotation_pool_last_month": "",
         "rotation_pool_symbols": [],
         "last_btc_status_report_bucket": "",
+        "trend_pool_source": "",
+        "trend_pool_source_detail": "",
+        "trend_pool_is_fresh": False,
+        "trend_pool_degraded": False,
+        "trend_pool_as_of_date": "",
+        "trend_pool_version": "",
+        "trend_pool_mode": "",
+        "trend_pool_source_project": "",
+        "trend_pool_loaded_at": "",
+        "trend_pool_messages": [],
+        TREND_POOL_LAST_GOOD_PAYLOAD_KEY: {},
+        TREND_POOL_ACTION_HISTORY_KEY: {},
         RETIRED_TREND_POSITIONS_KEY: {},
     }
     for symbol in TREND_UNIVERSE:
@@ -329,26 +669,45 @@ def set_symbol_trade_state(state, symbol, symbol_state):
     else:
         retired_positions.pop(symbol, None)
 
+
+def should_skip_duplicate_trend_action(state, symbol, action, action_date):
+    history = state.get(TREND_POOL_ACTION_HISTORY_KEY, {})
+    if not isinstance(history, dict):
+        return False
+    last_action = history.get(symbol, {})
+    return (
+        isinstance(last_action, dict)
+        and str(last_action.get("action", "")) == str(action)
+        and str(last_action.get("date", "")) == str(action_date)
+    )
+
+
+def record_trend_action(state, symbol, action, action_date):
+    history = state.setdefault(TREND_POOL_ACTION_HISTORY_KEY, {})
+    if not isinstance(history, dict):
+        history = {}
+        state[TREND_POOL_ACTION_HISTORY_KEY] = history
+    history[symbol] = {"action": str(action), "date": str(action_date)}
+
 # ==========================================
 # 1. State persistence and Telegram
 # ==========================================
-db = firestore.Client()
-doc_ref = db.collection('strategy').document('MULTI_ASSET_STATE')
-
-def get_trade_state():
+def get_trade_state(normalize=True):
     try:
-        doc = doc_ref.get()
+        doc = get_state_doc_ref().get()
         if doc.exists:
-            return normalize_trade_state(doc.to_dict())
-        return build_default_state()
+            payload = doc.to_dict()
+            return normalize_trade_state(payload) if normalize else payload
+        return build_default_state() if normalize else {}
     except Exception as e:
         print(f"Firestore get state failed: {e}")
         return None
 
+
 def set_trade_state(data):
     try:
         persisted_state = normalize_trade_state(data)
-        doc_ref.set(persisted_state)
+        get_state_doc_ref().set(persisted_state)
     except Exception as e:
         print(f"Firestore write failed: {e}")
 
@@ -745,10 +1104,14 @@ def build_stable_quality_pool(indicators_map, btc_snapshot, previous_pool):
     return selected_pool, ranking
 
 
-def refresh_rotation_pool(state, indicators_map, btc_snapshot):
+def refresh_rotation_pool(state, indicators_map, btc_snapshot, allow_refresh=True):
     current_month = datetime.now(timezone.utc).strftime("%Y-%m")
     available_symbols = set(TREND_UNIVERSE)
     cached_pool = [symbol for symbol in state.get("rotation_pool_symbols", []) if symbol in available_symbols]
+    if not allow_refresh and cached_pool:
+        state["rotation_pool_last_month"] = current_month
+        state["rotation_pool_symbols"] = cached_pool
+        return cached_pool, []
     if state.get("rotation_pool_last_month") == current_month and cached_pool:
         return cached_pool, []
 
@@ -832,11 +1195,11 @@ def get_tradable_qty(symbol, total_qty, prices, min_bnb_value):
 def main():
     # --- Config ---
     global TREND_UNIVERSE
-    TREND_UNIVERSE = load_trend_universe_from_live_pool()
     ATR_MULTIPLIER = 2.5
     CIRCUIT_BREAKER_PCT = -0.05
     MIN_BNB_VALUE, BUY_BNB_AMOUNT = 10.0, 15.0
     BTC_STATUS_REPORT_INTERVAL_HOURS = max(1, min(24, get_env_int("BTC_STATUS_REPORT_INTERVAL_HOURS", 24)))
+    allow_new_trend_entries_on_degraded = get_env_bool("TREND_POOL_ALLOW_NEW_ENTRIES_ON_DEGRADED", False)
 
     api_key = os.getenv('BINANCE_API_KEY')
     api_secret = os.getenv('BINANCE_API_SECRET')
@@ -860,14 +1223,34 @@ def main():
                     send_tg_msg(tg_token, tg_chat_id, f"❌ 无法连接 Binance API: {str(e)}")
                     return
 
-        state = get_trade_state()
-        if state is None:
+        raw_state = get_trade_state(normalize=False)
+        if raw_state is None:
             raise Exception(
                 "Failed to load Firestore state. Check GCP credentials (GCP_SA_KEY / GOOGLE_APPLICATION_CREDENTIALS), "
                 "service account validity, and Firestore API enablement."
             )
-        state = normalize_trade_state(state)
+        TREND_UNIVERSE, trend_pool_resolution = load_trend_universe_from_live_pool(
+            state=raw_state,
+            now_utc=datetime.now(timezone.utc),
+        )
+        state = normalize_trade_state(raw_state)
+        update_trend_pool_state(state, trend_pool_resolution)
+        set_trade_state(state)
         runtime_trend_universe = get_runtime_trend_universe(state)
+        allow_new_trend_entries = (not trend_pool_resolution["degraded"]) or allow_new_trend_entries_on_degraded
+
+        source_summary = (
+            f"📡 趋势池来源: {trend_pool_resolution['source_kind']} | "
+            f"mode={trend_pool_resolution['mode'] or 'unknown'} | "
+            f"version={trend_pool_resolution['version'] or 'unknown'} | "
+            f"as_of={trend_pool_resolution['as_of_date'] or 'n/a'} | "
+            f"project={trend_pool_resolution['source_project']}"
+        )
+        log_buffer.append(source_summary)
+        for message in trend_pool_resolution.get("messages", [])[-3:]:
+            log_buffer.append(f"   · {message}")
+        if trend_pool_resolution["degraded"] and not allow_new_trend_entries:
+            log_buffer.append("⚠️ 上游趋势池处于降级模式，暂停新的趋势买入并优先沿用既有月池。")
         
         # --- Balances and allocation ---
         u_total = get_total_balance(client, 'USDT')
@@ -910,7 +1293,12 @@ def main():
         for symbol in TREND_UNIVERSE:
             trend_indicators[symbol] = fetch_daily_indicators(client, symbol)
 
-        active_trend_pool, pool_ranking = refresh_rotation_pool(state, trend_indicators, btc_snapshot)
+        active_trend_pool, pool_ranking = refresh_rotation_pool(
+            state,
+            trend_indicators,
+            btc_snapshot,
+            allow_refresh=not trend_pool_resolution["degraded"],
+        )
         selected_candidates = select_rotation_weights(
             trend_indicators,
             prices,
@@ -1014,6 +1402,9 @@ def main():
                 if sell_reason:
                     sell_order_id = f"T_SELL_{symbol}_{int(time.time())}"
                     try:
+                        if should_skip_duplicate_trend_action(state, symbol, "sell", today_id_str):
+                            log_buffer.append(f"⏸️ 跳过重复卖出 {symbol}，同日卖出已记录。")
+                            continue
                         tradable_qty = balances[symbol]
                         qty = format_qty(client, symbol, tradable_qty)
                         if qty <= 0:
@@ -1032,12 +1423,21 @@ def main():
                             symbol,
                             {"is_holding": False, "entry_price": 0.0, "highest_price": 0.0},
                         )
+                        record_trend_action(state, symbol, "sell", today_id_str)
                         set_trade_state(state) 
                         send_tg_msg(tg_token, tg_chat_id, f"🚨 [趋势卖出] {symbol}\n原因: {sell_reason}\n价格: ${curr_price:.2f}")
                     except Exception as e: pass
             else:
                 candidate_meta = selected_candidates.get(symbol)
-                if indicators and candidate_meta and curr_price > indicators['sma20'] and curr_price > indicators['sma60'] and curr_price > indicators['sma200']:
+                can_open_new_position = (
+                    allow_new_trend_entries
+                    and indicators
+                    and candidate_meta
+                    and curr_price > indicators['sma20']
+                    and curr_price > indicators['sma60']
+                    and curr_price > indicators['sma200']
+                )
+                if can_open_new_position:
                     current_trend_val = sum(balances[sym] * prices[sym] for sym in runtime_trend_universe)
                     current_dca_val = balances['BTCUSDT'] * prices['BTCUSDT']
                     current_total_equity = u_total + fuel_val + current_trend_val + current_dca_val
@@ -1049,6 +1449,9 @@ def main():
                     if buy_u > 15:
                         buy_order_id = f"T_BUY_{symbol}_{int(time.time())}"
                         try:
+                            if should_skip_duplicate_trend_action(state, symbol, "buy", today_id_str):
+                                log_buffer.append(f"⏸️ 跳过重复买入 {symbol}，同日买入已记录。")
+                                continue
                             qty = format_qty(client, symbol, buy_u*0.985/curr_price)
                             usdt_cost = qty * curr_price
                             ensure_asset_available(client, 'USDT', usdt_cost, tg_token, tg_chat_id)
@@ -1060,6 +1463,7 @@ def main():
                             )
                             balances[symbol] += qty
                             u_total -= usdt_cost
+                            record_trend_action(state, symbol, "buy", today_id_str)
                             set_trade_state(state)
                             send_tg_msg(
                                 tg_token,
