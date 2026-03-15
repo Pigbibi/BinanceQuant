@@ -19,20 +19,26 @@ jobs:
 
       - name: 3. 准备/更新依赖环境（智能复用）
         run: |
+          REQ_FILE="requirements-lock.txt"
+          if [ ! -f "$REQ_FILE" ]; then REQ_FILE="requirements.txt"; fi
+          PYTHON_BIN="python3"
+          if command -v python3.11 >/dev/null 2>&1; then PYTHON_BIN="python3.11"; fi
+          echo "Using interpreter: $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"
+
           # 如果还没有虚拟环境，先创建并完整安装一次
           if [ ! -d "venv" ]; then
-            python3 -m venv venv
+            "$PYTHON_BIN" -m venv venv
             venv/bin/pip install -U pip
-            venv/bin/pip install -r requirements.txt
-            sha256sum requirements.txt | cut -d' ' -f1 > .venv_requirements_hash
+            venv/bin/pip install -r "$REQ_FILE"
+            sha256sum "$REQ_FILE" | cut -d' ' -f1 > .venv_requirements_hash
           else
-            CURR_HASH=$(sha256sum requirements.txt | cut -d' ' -f1)
+            CURR_HASH=$(sha256sum "$REQ_FILE" | cut -d' ' -f1)
             if [ -f ".venv_requirements_hash" ] && [ "$CURR_HASH" = "$(cat .venv_requirements_hash)" ]; then
-              echo "requirements.txt 未变化，跳过依赖安装，直接复用 venv。"
+              echo "$REQ_FILE 未变化，跳过依赖安装，直接复用 venv。"
             else
-              echo "requirements.txt 有变化，更新依赖环境。"
+              echo "$REQ_FILE 有变化，更新依赖环境。"
               venv/bin/pip install -U pip
-              venv/bin/pip install -r requirements.txt
+              venv/bin/pip install -r "$REQ_FILE"
               echo "$CURR_HASH" > .venv_requirements_hash
             fi
           fi
@@ -47,3 +53,7 @@ jobs:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           GOOGLE_APPLICATION_CREDENTIALS: ./gcp-key.json
+
+      - name: 5. 清理临时密钥
+        if: always()
+        run: rm -f gcp-key.json

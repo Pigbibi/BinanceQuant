@@ -1,4 +1,10 @@
-backtest.py
 __pycache__/
 *.py[cod]
 reports/
+.pytest_cache/
+.coverage
+.DS_Store
+.venv/
+venv/
+.venv_requirements_hash
+gcp-key.json

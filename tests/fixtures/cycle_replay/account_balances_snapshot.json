@@ -1,0 +1,57 @@
+{
+  "spot_balances": {
+    "USDT": {"free": "1000.0", "locked": "0.0"},
+    "BNB": {"free": "0.1", "locked": "0.0"},
+    "BTC": {"free": "0.0", "locked": "0.0"},
+    "ETH": {"free": "0.0", "locked": "0.0"},
+    "SOL": {"free": "0.0", "locked": "0.0"},
+    "XRP": {"free": "0.0", "locked": "0.0"},
+    "LTC": {"free": "0.0", "locked": "0.0"},
+    "BCH": {"free": "0.0", "locked": "0.0"}
+  },
+  "earn_positions": {
+    "USDT": {"rows": []},
+    "BNB": {"rows": []},
+    "BTC": {"rows": []},
+    "ETH": {"rows": []},
+    "SOL": {"rows": []},
+    "XRP": {"rows": []},
+    "LTC": {"rows": []},
+    "BCH": {"rows": []}
+  },
+  "earn_product_list": {
+    "USDT": {"rows": [{"productId": "usdt-flex"}]}
+  },
+  "avg_prices": {
+    "BNBUSDT": "300.0",
+    "BTCUSDT": "60000.0",
+    "ETHUSDT": "2500.0",
+    "SOLUSDT": "150.0",
+    "XRPUSDT": "1.2",
+    "LTCUSDT": "100.0",
+    "BCHUSDT": "420.0"
+  },
+  "symbol_info": {
+    "BNBUSDT": {
+      "filters": [{"filterType": "LOT_SIZE", "stepSize": "0.01"}]
+    },
+    "BTCUSDT": {
+      "filters": [{"filterType": "LOT_SIZE", "stepSize": "0.0001"}]
+    },
+    "ETHUSDT": {
+      "filters": [{"filterType": "LOT_SIZE", "stepSize": "0.001"}]
+    },
+    "SOLUSDT": {
+      "filters": [{"filterType": "LOT_SIZE", "stepSize": "0.01"}]
+    },
+    "XRPUSDT": {
+      "filters": [{"filterType": "LOT_SIZE", "stepSize": "0.1"}]
+    },
+    "LTCUSDT": {
+      "filters": [{"filterType": "LOT_SIZE", "stepSize": "0.01"}]
+    },
+    "BCHUSDT": {
+      "filters": [{"filterType": "LOT_SIZE", "stepSize": "0.001"}]
+    }
+  }
+}

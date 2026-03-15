@@ -1,18 +1,38 @@
 # BinanceQuant
 
+Language: English | [简体中文](README.zh-CN.md)
+
 Automated crypto quant for Binance spot: BTC DCA core plus altcoin trend rotation. Uses valuation (AHR999, Z-Score) and trend gates (MA200, slope). Compatible with Binance flexible earn (auto redeem/subscribe), USDT buffer, BNB fuel, Telegram alerts, and Firestore state.
 
 **Trend universe source:** Prefer the upstream published pool from CryptoLeaderRotation. This repo now validates upstream payload freshness and contract shape before using it, keeps a last known good upstream payload in state, and only reaches static fallback as an explicit degraded last resort.
 
+**Workspace assumption:** Local replay and monitoring helpers expect the upstream repo to be checked out at `../CryptoLeaderRotation` unless you override the relevant path flags/env vars.
+
+**Python runtime:** Prefer Python `3.11`. CI is pinned to 3.11, and local helper commands now prefer `python3.11` when available while still falling back to `python3`.
+
+## Repo Shape
+
+- `main.py` is the live orchestration entrypoint.
+- `strategy_core.py` contains shared pure strategy logic.
+- `research/` contains optional audit and historical analysis tools.
+- `run_*` scripts are local operators' helpers for fixed-input replay and maintenance.
+- `tests/fixtures/` contains fixed inputs used by the replay regression tests.
+
 ## Layout
 
 - **main.py** — Live script (run hourly).
-- **shadow_replay.py** — Local end-to-end shadow replay for the trend sleeve using historical upstream artifacts.
-- **run_challenger_robustness.py** — Additive robustness runner for baseline vs challenger shadow-replay comparisons.
-- **run_shadow_candidate_monitor.py** — Dual-track shadow monitor for the official baseline and the `challenger_topk_60` candidate.
-- **run_monthly_shadow_monitor.py** — Operator-friendly monthly wrapper for the dual-track shadow monitor.
-- **run_monthly_ai_briefing.py** — Reporting-only monthly AI briefing package generator for human review and ChatGPT interpretation.
-- **requirements.txt** — Python deps.
+- **strategy_core.py** — Shared pure strategy math used by live execution and research backtests.
+- **runtime_support.py** — Runtime/report helpers shared by live execution and dry-run replay.
+- **live_services.py** — Firestore state and Telegram notification adapters for live operation.
+- **exchange_support.py** — Spot balance, earn-buffer, and exchange quantity-format helpers.
+- **trend_pool_support.py** — Upstream trend-pool contract parsing, validation, and fallback helpers.
+- **trade_state_support.py** — Trade-state normalization and retired-position tracking helpers.
+- **research/backtest.py** — Research backtest / strategy-comparison runner against Binance history; useful for audit/repro, not required for hourly live execution.
+- **run_cycle_replay.py** — Fixed-input dry-run executor for one full strategy cycle using local fixtures.
+- **requirements.txt** — Human-maintained top-level Python deps.
+- **requirements-lock.txt** — Pinned dependency set used by CI/deploy when present.
+
+Generated local outputs under `reports/` are intentionally not committed. Fixed-input fixtures under `tests/fixtures/` are committed because they are part of the dry-run regression harness.
 
 ## Strategy Overview
 
@@ -206,160 +226,52 @@ export GOOGLE_APPLICATION_CREDENTIALS=/path/to/gcp-sa.json
 python main.py
 ```
 
-### Local shadow replay
+### Local research backtest
 
-To replay the downstream trend sleeve against locally generated upstream shadow releases:
-
-```bash
-python3 shadow_replay.py --release-index ../CryptoLeaderRotation/data/output/shadow_releases/release_index.csv --name baseline
-```
-
-For challenger robustness work, the repo also includes a matrix runner that compares baseline and challenger release histories across activation-lag, friction, and missing-release stress cases:
+To compare the fixed-pool baseline and the auto-pool research variants against Binance historical data:
 
 ```bash
-python3 run_challenger_robustness.py
+python3 -m research.backtest
 ```
 
-For the ongoing shadow-production candidate workflow, use the dedicated dual-track monitor:
+### Fixed-input cycle replay
+
+To execute one fully dry-run strategy cycle from local fixtures, without live Binance or Firestore writes:
 
 ```bash
-python3 run_shadow_candidate_monitor.py
+python3 run_cycle_replay.py --run-id local-check
 ```
 
-For the recurring monthly operator workflow, use:
+This emits a structured JSON report with:
+
+- selected upstream pool and final candidates
+- trend buy/sell intents
+- BTC DCA intents
+- earn subscribe/redeem intents
+- suppressed vs executed side-effect counts
+
+### Tests
+
+Committed unit tests can be run with:
 
 ```bash
-python3 run_monthly_shadow_monitor.py
+python3 -m unittest \
+  tests.test_strategy_core \
+  tests.test_cycle_replay_runtime \
+  tests.test_trend_pool_loading \
+  -v
 ```
 
-Or the local helper target:
+Repository hygiene:
 
-```bash
-make monthly-shadow-monitor
-```
-
-To generate the reporting-only AI briefing package after the monitor outputs exist:
-
-```bash
-python3 run_monthly_ai_briefing.py
-```
-
-Or the local helper target:
-
-```bash
-make monthly-ai-briefing
-```
+- ignore local/runtime artifacts such as `reports/`, `venv/`, `.venv/`, `gcp-key.json`, and `.venv_requirements_hash`
+- keep `tests/fixtures/` tracked so the cycle replay stays reproducible across machines
 
 ## Notes
 
 - The upstream CryptoLeaderRotation project is the primary selector and contract owner for the monthly live pool.
 - Local stable-quality pool ranking logic in this repo remains as a runtime fallback and execution convenience, not the preferred healthy input.
-- `shadow_replay.py` is the additive end-to-end research path for the downstream trend sleeve. It uses historical upstream shadow-release artifacts plus local daily price history; it does not require live Firestore or Binance connectivity.
-- `run_challenger_robustness.py` is research-only. It does not change live defaults; it exists to test whether a challenger advantage is broad, lag-tolerant, and resilient to mild friction or missing monthly releases.
-- `run_shadow_candidate_monitor.py` is shadow-only. Real execution still references the official baseline track; the challenger candidate is loaded only for paper comparison and must never drive orders.
-
-## Shadow Candidate Gates
-
-The current `challenger_topk_60` track is a shadow-production candidate, not a live switch.
-
-Before any future controlled production trial, the candidate should keep clearing all of these:
-
-- sustained outperformance versus the baseline over a new forward observation window
-- excess returns that are not overly concentrated in a few months or releases
-- acceptable lag and friction sensitivity
-- no major deterioration in risk-off behavior
-- no operational ambiguity about track identity, freshness, or shadow-only isolation
-
-## Monthly Shadow Monitor
-
-Canonical monthly command:
-
-```bash
-python3 run_monthly_shadow_monitor.py
-```
-
-Canonical reports:
-
-- `reports/shadow_candidate_track_summary.csv`
-- `reports/shadow_candidate_side_by_side_summary.csv`
-- `reports/shadow_candidate_promotion_watchlist.csv`
-- `reports/shadow_candidate_sensitivity_summary.csv`
-- `reports/shadow_candidate_concentration_summary.csv`
-- `reports/shadow_candidate_regime_summary.csv`
-
-The monthly console summary prints:
-
-- baseline CAGR / Sharpe / max drawdown
-- challenger CAGR / Sharpe / max drawdown
-- recent 12-month outperformance rate
-- recent 6-month outperformance rate
-- top-5 positive excess concentration share
-- current recommendation
-
-Recommendation policy:
-
-- `remain shadow-only`
-  - challenger is no longer clearly ahead or fails key risk/concentration/sensitivity gates
-- `continue observation`
-  - challenger remains cumulatively ahead and operationally acceptable, but breadth is still not strong enough for a trial
-- `candidate for future controlled trial`
-  - challenger stays ahead and also clears the recent-breadth and sensitivity gates
-
-Real execution remains baseline-only. The challenger track is shadow-only and cannot place orders.
-
-## Monthly Shadow Review
-
-Operator flow:
-
-1. refresh the shadow monitor reports:
-   `make monthly-shadow-monitor`
-2. build the reporting-only monthly review package:
-   `make monthly-ai-briefing`
-
-Keep these three layers separate when reading runtime logs or reports:
-
-- upstream official input pool
-  the monthly symbols accepted from the upstream contract for this cycle
-- downstream observation/candidate panel
-  local display and ranking context only; not necessarily the same displayed set as the upstream official pool line
-- actual rotation target / execution decision
-  the final top-2 action set, or a defensive no-candidate stance
-
-Operator read order:
-
-- `reports/monthly_ai_review.md`
-  human-readable monthly summary for direct review
-- `reports/monthly_chatgpt_prompt.md`
-  paste-ready prompt for manual ChatGPT interpretation
-- `reports/monthly_ai_review.json`
-  machine-readable structure for consistent downstream tooling
-
-These monthly review outputs are reporting-only. Baseline remains official/live, `challenger_topk_60` remains shadow-only, and no automatic switch behavior is implied.
-
-## Monthly AI Briefing
-
-Operator flow:
-
-1. Run upstream monthly build in CryptoLeaderRotation:
-   `make monthly-shadow-build`
-2. Run the downstream shadow monitor:
-   `make monthly-shadow-monitor`
-3. Generate the AI briefing package:
-   `make monthly-ai-briefing`
-
-Generated files:
-
-- `reports/monthly_ai_review.md`
-- `reports/monthly_ai_review.json`
-- `reports/monthly_chatgpt_prompt.md`
-
-The briefing package is reporting-only:
-
-- baseline remains official/live
-- `challenger_topk_60` remains shadow-only
-- no production switch is implied
-- `monthly_chatgpt_prompt.md` is designed to be pasted into ChatGPT for interpretation
-- no separate monthly AI Telegram channel is added in this repo
+- Monthly research reporting, shadow candidate evaluation, and monthly release review should live in the upstream CryptoLeaderRotation project, not in this downstream execution repo.
 
 ## Telegram
 

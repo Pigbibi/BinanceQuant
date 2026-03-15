@@ -161,6 +161,82 @@ class TrendPoolLoadingTests(unittest.TestCase):
             "2026-03-10-core_major",
         )
 
+    def test_update_trend_pool_state_does_not_replace_last_good_from_local_file(self):
+        validated = main.validate_trend_pool_payload(
+            build_payload(),
+            source_label="file:/tmp/live_pool_legacy.json",
+            now_utc=datetime(2026, 3, 14, tzinfo=timezone.utc),
+            acceptable_modes=["core_major"],
+            expected_pool_size=5,
+            enforce_freshness=True,
+        )
+        resolution = main.build_trend_pool_resolution(
+            validated,
+            source_kind="local_file",
+            degraded=True,
+            now_utc=datetime(2026, 3, 14, tzinfo=timezone.utc),
+        )
+        state = main.build_default_state()
+        state[main.TREND_POOL_LAST_GOOD_PAYLOAD_KEY] = build_payload(as_of_date="2026-02-15")
+
+        main.update_trend_pool_state(state, resolution)
+
+        self.assertEqual(state["trend_pool_source"], "local_file")
+        self.assertEqual(
+            state[main.TREND_POOL_LAST_GOOD_PAYLOAD_KEY]["version"],
+            "2026-02-15-core_major",
+        )
+
+    def test_get_total_balance_raises_when_spot_balance_is_unavailable(self):
+        class SpotFailureClient:
+            def get_asset_balance(self, *, asset):
+                raise RuntimeError("spot api unavailable")
+
+            def get_simple_earn_flexible_product_position(self, *, asset):
+                return {"rows": []}
+
+        with self.assertRaises(main.BalanceFetchError):
+            main.get_total_balance(SpotFailureClient(), "USDT", log_buffer=[])
+
+    def test_get_total_balance_keeps_spot_balance_when_earn_lookup_fails(self):
+        class EarnFailureClient:
+            def get_asset_balance(self, *, asset):
+                return {"free": "1.5", "locked": "0.5"}
+
+            def get_simple_earn_flexible_product_position(self, *, asset):
+                raise RuntimeError("earn api unavailable")
+
+        log_buffer = []
+        total_balance = main.get_total_balance(EarnFailureClient(), "USDT", log_buffer=log_buffer)
+
+        self.assertAlmostEqual(total_balance, 2.0)
+        self.assertTrue(any("理财余额读取失败" in message for message in log_buffer))
+
+    def test_allocate_trend_buy_budget_renormalizes_remaining_buy_candidates(self):
+        selected_candidates = {
+            "ETHUSDT": {"weight": 0.5},
+            "SOLUSDT": {"weight": 0.3},
+            "XRPUSDT": {"weight": 0.2},
+        }
+
+        full_alloc = main.allocate_trend_buy_budget(selected_candidates, ["ETHUSDT", "SOLUSDT"], 1000.0)
+        single_alloc = main.allocate_trend_buy_budget(selected_candidates, ["SOLUSDT"], 1000.0)
+
+        self.assertAlmostEqual(sum(full_alloc.values()), 1000.0)
+        self.assertAlmostEqual(full_alloc["ETHUSDT"], 625.0)
+        self.assertAlmostEqual(full_alloc["SOLUSDT"], 375.0)
+        self.assertEqual(single_alloc, {"SOLUSDT": 1000.0})
+
+    def test_resolve_runtime_trend_pool_rejects_invalid_injected_payload(self):
+        runtime = main.ExecutionRuntime(
+            dry_run=True,
+            now_utc=datetime(2026, 3, 14, tzinfo=timezone.utc),
+            trend_pool_payload={"version": "broken"},
+        )
+
+        with self.assertRaises(ValueError):
+            main.resolve_runtime_trend_pool(runtime, raw_state={})
+
     def test_duplicate_trend_action_guard(self):
         state = main.build_default_state()
 

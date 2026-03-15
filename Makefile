@@ -1,10 +1,6 @@
-.PHONY: monthly-shadow-monitor monthly-shadow-check monthly-ai-briefing
+PYTHON := $(shell if command -v python3.11 >/dev/null 2>&1; then echo python3.11; else echo python3; fi)
 
-monthly-shadow-monitor:
-	python3 run_monthly_shadow_monitor.py
+.PHONY: monthly-shadow-check
 
 monthly-shadow-check:
-	python3 -m unittest discover -s tests
-
-monthly-ai-briefing:
-	python3 run_monthly_ai_briefing.py
+	$(PYTHON) -m unittest discover -s tests
