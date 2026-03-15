@@ -222,7 +222,9 @@ For local testing only:
 ```bash
 cd /path/to/BinanceQuant
 python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+REQ_FILE="requirements-lock.txt"
+if [ ! -f "$REQ_FILE" ]; then REQ_FILE="requirements.txt"; fi
+pip install -r "$REQ_FILE"
 export BINANCE_API_KEY=... BINANCE_API_SECRET=... TG_TOKEN=... TG_CHAT_ID=...
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/gcp-sa.json
 python main.py
@@ -268,6 +270,8 @@ Repository hygiene:
 
 - ignore local/runtime artifacts such as `reports/`, `venv/`, `.venv/`, `gcp-key.json`, and `.venv_requirements_hash`
 - keep `tests/fixtures/` tracked so the cycle replay stays reproducible across machines
+
+Operational behavior for degraded mode, Firestore failures, Binance API failures, Telegram failures, and workflow secret handling is documented in `docs/operator_runbook.md`.
 
 ## Notes
 
