@@ -1131,6 +1131,7 @@ def _run_daily_circuit_breaker(
             runtime_notify(runtime, report, f"❌ Circuit-breaker sell failed for {symbol}: {exc}")
 
     state.update({"is_circuit_broken": True})
+    report["circuit_breaker_triggered"] = True
     runtime_set_trade_state(runtime, report, state, reason="daily_circuit_breaker")
     runtime_notify(runtime, report, f"🚫 Daily trend sleeve circuit breaker triggered ({trend_daily_pnl:.2%}); trend positions cleared while BTC DCA remains active.")
     return True
@@ -1597,6 +1598,10 @@ def execute_cycle(runtime):
         state, trend_pool_resolution, runtime_trend_universe, allow_new_trend_entries = cycle_state
         _append_trend_pool_source_logs(log_buffer, trend_pool_resolution, allow_new_trend_entries)
 
+        report["upstream_pool_symbols"] = list(runtime_trend_universe.keys())
+        if trend_pool_resolution["degraded"]:
+            report["degraded_mode_level"] = trend_pool_resolution.get("source", "unknown")
+
         market_snapshot = _capture_market_snapshot(
             runtime,
             report,
@@ -1617,6 +1622,9 @@ def execute_cycle(runtime):
         total_equity = allocation["total_equity"]
         trend_layer_equity = allocation["trend_layer_equity"]
         trend_val_equity = allocation["trend_val"]
+
+        report["total_equity_usdt"] = total_equity
+        report["trend_equity_usdt"] = trend_val_equity
 
         now_utc = runtime.now_utc
         today_utc = now_utc.strftime("%Y-%m-%d")
@@ -1665,6 +1673,10 @@ def execute_cycle(runtime):
         total_equity = post_trade_allocation["total_equity"]
         trend_layer_equity = post_trade_allocation["trend_layer_equity"]
         trend_val_equity = post_trade_allocation["trend_val"]
+
+        report["total_equity_usdt"] = total_equity
+        report["trend_equity_usdt"] = trend_val_equity
+
         btc_target_ratio = post_trade_allocation["btc_target_ratio"]
         dca_usdt_pool = post_trade_allocation["dca_usdt_pool"]
         dca_val = post_trade_allocation["dca_val"]
