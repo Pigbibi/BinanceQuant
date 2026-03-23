@@ -1,7 +1,15 @@
+import os
 import requests
 
 
 _FIRESTORE_CLIENT = None
+
+NOTIFY_LANG = os.getenv("NOTIFY_LANG", "en")
+
+_TG_PREFIX = {
+    "zh": "🤖 加密量化助手",
+    "en": "🤖 Crypto Quant Bot",
+}
 
 
 def get_firestore_client():
@@ -41,7 +49,8 @@ def send_tg_msg(token, chat_id, text):
     if not token or not chat_id:
         return
     url = f"https://api.telegram.org/bot{token}/sendMessage"
+    prefix = _TG_PREFIX.get(NOTIFY_LANG, _TG_PREFIX["en"])
     try:
-        requests.post(url, data={"chat_id": chat_id, "text": f"🤖 Crypto quant assistant:\n{text}"}, timeout=10)
+        requests.post(url, data={"chat_id": chat_id, "text": f"{prefix}:\n{text}"}, timeout=10)
     except Exception:
         print("Telegram send failed")

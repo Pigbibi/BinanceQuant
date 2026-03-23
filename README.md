@@ -224,6 +224,46 @@ Optional:
 | `TREND_POOL_ACCEPTABLE_MODES` | Comma-separated allowed upstream modes (default `core_major`) |
 | `TREND_POOL_EXPECTED_SIZE` | Expected upstream live-pool size for contract checks (default `5`) |
 | `TREND_POOL_ALLOW_NEW_ENTRIES_ON_DEGRADED` | Allow trend buys when running on last-known-good or fallback pool sources (default `false`) |
+| `NOTIFY_LANG` | Notification language: `en` (English, default) or `zh` (Chinese) |
+
+## Notification Format
+
+Telegram notifications use structured emoji formatting with full i18n support. Set `NOTIFY_LANG=zh` for Chinese or leave default for English.
+
+**Strategy heartbeat:**
+```
+💓 【Strategy Heartbeat】
+🕐 UTC Time: 2026-03-24 00:00
+━━━━━━━━━━━━━━━━━━
+💰 Total Equity: $12,500.00
+📈 Trend Holdings: $3,200.00 (1.25%)
+₿ BTC Price: $87,000.00
+━━━━━━━━━━━━━━━━━━
+AHR999: 0.850
+Z-Score: 1.20 / Threshold 3.00
+🎯 BTC Target Allocation: 28.5%
+🚦 BTC Gate: ON
+━━━━━━━━━━━━━━━━━━
+💡 Note: BTC valuation is neutral; follow the system cadence.
+```
+
+**Trade notifications:**
+```
+✅ 【Trend Buy】 ETHUSDT
+Price: $3,450.00
+Budget: $800.00
+Rotation Weight: 60%
+Relative BTC Score: 0.85
+
+📉 【Trend Sell】 SOLUSDT
+Reason: ATR trailing stop ($142.50)
+Price: $138.20
+
+🛡️ 【BTC DCA Buy】 BTC
+AHR999: 0.45
+Target Allocation: 28.5%
+Quantity: 0.00125 BTC
+```
 
 ## Deploy (self-hosted runner + workflow)
 
@@ -342,3 +382,5 @@ Operational behavior for degraded mode, Firestore failures, Binance API failures
 ## Telegram
 
 Alerts: trend buys/sells, BTC DCA, earn redeems, circuit breaker, errors. Optional periodic BTC status (AHR999, Z-Score, gate, trend PnL). Default once per day at UTC 00:00; set `BTC_STATUS_REPORT_INTERVAL_HOURS` to change.
+
+All notifications support `NOTIFY_LANG` (`en` default, `zh` for Chinese). See [Notification Format](#notification-format) for examples.

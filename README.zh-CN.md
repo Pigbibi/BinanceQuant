@@ -207,6 +207,46 @@
 | `TREND_POOL_ACCEPTABLE_MODES` | 可接受的上游 mode，默认 `core_major` |
 | `TREND_POOL_EXPECTED_SIZE` | 上游 live pool 期望数量，默认 `5` |
 | `TREND_POOL_ALLOW_NEW_ENTRIES_ON_DEGRADED` | degraded mode 下是否允许趋势新开仓，默认 `false` |
+| `NOTIFY_LANG` | 通知语言: `en`（英文，默认）或 `zh`（中文） |
+
+## 通知格式
+
+Telegram 通知采用结构化 Emoji 排版，支持中英文切换。设置 `NOTIFY_LANG=zh` 切换为中文。
+
+**策略心跳:**
+```
+💓 【策略心跳】
+🕐 UTC 时间: 2026-03-24 00:00
+━━━━━━━━━━━━━━━━━━
+💰 总净值: $12,500.00
+📈 趋势层持仓: $3,200.00 (1.25%)
+₿ BTC 价格: $87,000.00
+━━━━━━━━━━━━━━━━━━
+AHR999: 0.850
+Z-Score: 1.20 / 阈值 3.00
+🎯 BTC 目标配比: 28.5%
+🚦 BTC 闸门: 开启
+━━━━━━━━━━━━━━━━━━
+💡 建议: BTC 估值中性，跟随系统节奏即可。
+```
+
+**交易通知:**
+```
+✅ 【趋势买入】 ETHUSDT
+价格: $3,450.00
+预算: $800.00
+轮动权重: 60%
+相对BTC得分: 0.85
+
+📉 【趋势卖出】 SOLUSDT
+原因: ATR trailing stop ($142.50)
+价格: $138.20
+
+🛡️ 【BTC 定投买入】 BTC
+AHR999: 0.45
+目标配比: 28.5%
+数量: 0.00125 BTC
+```
 
 ## 部署
 
@@ -300,3 +340,5 @@ Telegram 通知会覆盖：
 - 异常错误
 
 另外还支持可选的 BTC 周期性状态报告，默认每天 UTC 00:00 发送一次，可通过 `BTC_STATUS_REPORT_INTERVAL_HOURS` 调整。
+
+所有通知支持 `NOTIFY_LANG` 切换语言（`en` 默认英文，`zh` 中文）。参见 [通知格式](#通知格式) 示例。
