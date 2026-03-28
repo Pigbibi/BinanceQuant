@@ -32,7 +32,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "BINANCE_API_KEY": "api-key",
                 "BINANCE_API_SECRET": "api-secret",
                 "TG_TOKEN": "tg-token",
-                "TG_CHAT_ID": "chat-id",
+                "GLOBAL_TELEGRAM_CHAT_ID": "chat-id",
             },
             clear=False,
         ):
@@ -52,14 +52,13 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIs(runtime.state_writer, state_writer)
         self.assertIs(runtime.notifier, notifier)
 
-    def test_build_live_runtime_uses_global_telegram_chat_id_fallback(self):
+    def test_build_live_runtime_uses_global_telegram_chat_id(self):
         with patch.dict(
             os.environ,
             {
                 "BINANCE_API_KEY": "api-key",
                 "BINANCE_API_SECRET": "api-secret",
                 "TG_TOKEN": "tg-token",
-                "TG_CHAT_ID": "",
                 "GLOBAL_TELEGRAM_CHAT_ID": "shared-chat-id",
             },
             clear=False,

@@ -64,7 +64,6 @@
 | `BINANCE_API_KEY` | 运行时 |
 | `BINANCE_API_SECRET` | 运行时 |
 | `TG_TOKEN` | 运行时 |
-| `TG_CHAT_ID` | 运行时 |
 | `GCP_SA_KEY` | 运行时 |
 | `ANTHROPIC_API_KEY` | AI 审阅 |
 
@@ -192,8 +191,7 @@
 | `BINANCE_API_KEY` | Binance API Key |
 | `BINANCE_API_SECRET` | Binance API Secret |
 | `TG_TOKEN` | Telegram Bot Token |
-| `TG_CHAT_ID` | 当前服务自己的 Telegram 告警目标 Chat ID。不填时会回退到 `GLOBAL_TELEGRAM_CHAT_ID`。 |
-| `GLOBAL_TELEGRAM_CHAT_ID` | 可选的共享 Telegram Chat ID。适合多个 quant 服务共用一个接收目标。 |
+| `GLOBAL_TELEGRAM_CHAT_ID` | 这个服务使用的 Telegram Chat ID。 |
 | `GOOGLE_APPLICATION_CREDENTIALS` | GCP 服务账号 JSON 路径 |
 
 如果你在多个 quant 仓库之间保留一层共享配置，通常只建议共享 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG`。`TG_TOKEN`、Binance API Key、GCP 凭据这些仍然应该由这个仓库自己管理。
@@ -273,17 +271,16 @@ AHR999: 0.45
 - `BINANCE_API_KEY`
 - `BINANCE_API_SECRET`
 - `TG_TOKEN`
-- `TG_CHAT_ID`（如果仓库/组织 Variables 里已经提供 `GLOBAL_TELEGRAM_CHAT_ID`，这里可以不填）
 - `GLOBAL_TELEGRAM_CHAT_ID`
 - `GCP_SA_KEY`
 - `ANTHROPIC_API_KEY`
 
-现在 runtime workflow 也会把这两个仓库/组织 Variables 传给运行进程：
+现在 runtime workflow 要求这两个仓库/组织 Variables 已经提供：
 
 - `GLOBAL_TELEGRAM_CHAT_ID`
 - `NOTIFY_LANG`
 
-也就是说，如果你在多个 quant 仓库之间保留一层很小的共享配置，这个仓库可以直接使用组织级 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG`。在这种情况下，`TG_CHAT_ID` 就变成可选；但 `TG_TOKEN`、Binance API key、`GCP_SA_KEY` 仍然应该留在这个仓库自己的 secrets 里。
+也就是说，如果你在多个 quant 仓库之间保留一层很小的共享配置，这个仓库直接使用组织级 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG`。`TG_TOKEN`、Binance API key、`GCP_SA_KEY` 仍然应该留在这个仓库自己的 secrets 里。
 
 ### 4. GCP / Firestore
 
@@ -298,8 +295,7 @@ AHR999: 0.45
 cd /path/to/BinanceQuant
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-export BINANCE_API_KEY=... BINANCE_API_SECRET=... TG_TOKEN=... TG_CHAT_ID=...
-# 或者: export GLOBAL_TELEGRAM_CHAT_ID=...
+export BINANCE_API_KEY=... BINANCE_API_SECRET=... TG_TOKEN=... GLOBAL_TELEGRAM_CHAT_ID=...
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/gcp-sa.json
 python main.py
 ```

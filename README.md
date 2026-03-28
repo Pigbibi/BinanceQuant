@@ -86,7 +86,6 @@ An **AI Monthly Review** workflow triggers on that issue label and posts a bilin
 | `BINANCE_API_KEY` | Runtime |
 | `BINANCE_API_SECRET` | Runtime |
 | `TG_TOKEN` | Runtime |
-| `TG_CHAT_ID` | Runtime (optional if `GLOBAL_TELEGRAM_CHAT_ID` is provided via repo/org Variables) |
 | `GCP_SA_KEY` | Runtime |
 | `ANTHROPIC_API_KEY` | AI Review |
 
@@ -209,8 +208,7 @@ Required:
 | `BINANCE_API_KEY` | Binance API key |
 | `BINANCE_API_SECRET` | Binance API secret |
 | `TG_TOKEN` | Telegram bot token |
-| `TG_CHAT_ID` | Per-service Telegram chat ID for alerts. Falls back to `GLOBAL_TELEGRAM_CHAT_ID` if unset. |
-| `GLOBAL_TELEGRAM_CHAT_ID` | Optional shared Telegram chat ID for teams that route multiple quant services to the same destination. |
+| `GLOBAL_TELEGRAM_CHAT_ID` | Telegram chat ID for alerts. |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to GCP service account JSON (or use `GCP_SA_KEY` and write to `gcp-key.json` before run) |
 
 Across multiple quant repositories, `GLOBAL_TELEGRAM_CHAT_ID` and `NOTIFY_LANG` are reasonable shared settings. `TG_TOKEN`, Binance API keys, and GCP credential material should stay repository-specific.
@@ -306,19 +304,18 @@ In **Settings → Secrets and variables → Actions**, add:
 | `BINANCE_API_KEY` | Binance API key |
 | `BINANCE_API_SECRET` | Binance API secret |
 | `TG_TOKEN` | Telegram bot token |
-| `TG_CHAT_ID` | Per-service Telegram chat ID. Falls back to `GLOBAL_TELEGRAM_CHAT_ID` if unset. |
-| `GLOBAL_TELEGRAM_CHAT_ID` | Optional shared Telegram chat ID for teams that route multiple quant services to the same destination. |
+| `GLOBAL_TELEGRAM_CHAT_ID` | Telegram chat ID for alerts. |
 | `GCP_SA_KEY` | Full JSON content of the GCP service account key (written by the runtime workflow to a temp file and exported as `GOOGLE_APPLICATION_CREDENTIALS` only for the strategy step) |
 | `ANTHROPIC_API_KEY` | Anthropic API key (used by the AI Review workflow to post monthly bilingual analysis) |
 
 The runtime workflow passes these into the `Run trading strategy` step; it does not use a `.env` file on the runner.
 
-It now also forwards:
+It now also requires these repo or organization Variables:
 
 - `GLOBAL_TELEGRAM_CHAT_ID` from repo/org Variables
 - `NOTIFY_LANG` from repo/org Variables
 
-That means `TG_CHAT_ID` can be omitted if you already keep one shared chat target at the repo or organization level. `TG_TOKEN`, Binance API keys, and `GCP_SA_KEY` should still remain repository-specific.
+`TG_TOKEN`, Binance API keys, and `GCP_SA_KEY` should still remain repository-specific.
 
 ### 4. GCP / Firestore
 
@@ -335,8 +332,7 @@ python3 -m venv venv && source venv/bin/activate
 REQ_FILE="requirements-lock.txt"
 if [ ! -f "$REQ_FILE" ]; then REQ_FILE="requirements.txt"; fi
 pip install -r "$REQ_FILE"
-export BINANCE_API_KEY=... BINANCE_API_SECRET=... TG_TOKEN=... TG_CHAT_ID=...
-# or: export GLOBAL_TELEGRAM_CHAT_ID=...
+export BINANCE_API_KEY=... BINANCE_API_SECRET=... TG_TOKEN=... GLOBAL_TELEGRAM_CHAT_ID=...
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/gcp-sa.json
 python main.py
 ```
