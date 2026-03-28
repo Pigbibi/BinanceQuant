@@ -253,6 +253,8 @@ AHR999: 0.45
 
 本仓库默认运行在 **self-hosted GitHub Actions runner** 上，例如 VPS。workflow 会拉代码、安装依赖、从 secret 写入 `gcp-key.json`，然后运行 `main.py`。不是“手动下载后本地 cron”那种流程。
 
+这个策略仓库现在通过 `QuantPlatformKit` 复用 Binance 客户端初始化、余额辅助、行情快照和下单数量格式化。runner 仍然只执行这个策略仓库本身，`QuantPlatformKit` 不单独部署。
+
 ### 1. Self-hosted runner
 
 - 在仓库 `Settings -> Actions -> Runners` 中添加 runner
@@ -263,6 +265,8 @@ AHR999: 0.45
 - [`.github/workflows/main.yml`](./.github/workflows/main.yml) 负责 checkout、写入 GCP key、准备 venv、执行 `main.py`
 - `push` 只触发 job；真正执行策略的步骤默认只在 `workflow_dispatch` 或 `schedule` 下运行
 - 如需定时运行，可在 workflow 中加入 `schedule`
+- VPS 侧推荐的运行单元名：`binance-quant`
+- Cloud Run / VPS 的统一部署规则和命名建议见 [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md)
 
 ### 3. Repository secrets
 

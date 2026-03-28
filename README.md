@@ -270,6 +270,8 @@ Quantity: 0.00125 BTC
 
 The repo is intended to run on a **self-hosted GitHub Actions runner** (e.g. a VPS). The runtime workflow checks out code, installs dependencies, writes GCP credentials into a runner temp file inside the execution step, removes that file automatically on exit, then runs `main.py`. The runner is expected to receive `workflow_dispatch` requests from one external scheduler instead of relying on GitHub's built-in hourly scheduler.
 
+This strategy repo now depends on `QuantPlatformKit` for Binance client bootstrap, balance helpers, market-data snapshots, and quantity-format helpers. The runner still executes this strategy repo only; `QuantPlatformKit` is not deployed separately.
+
 ### 1. Self-hosted runner
 
 - In the repo: **Settings → Actions → Runners**, add a new self-hosted runner (Linux recommended).
@@ -283,6 +285,8 @@ The repo is intended to run on a **self-hosted GitHub Actions runner** (e.g. a V
 - **Runtime cadence:** GitHub Actions no longer schedules hourly runtime execution for this repo. The expected production model is one external scheduler, such as VPS cron + `curl`, calling the GitHub `workflow_dispatch` API for `main.yml`.
 - Use `Actions -> Runtime -> Run workflow` for one-off manual runs.
 - If you automate dispatch from a VPS, keep a single scheduler of record and avoid firing a new dispatch while the previous runtime job is still running.
+- Recommended runtime service name on the VPS side: `binance-quant`.
+- For the shared deployment model and naming rules across Cloud Run and VPS workloads, see [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md).
 
 Example API dispatch:
 
