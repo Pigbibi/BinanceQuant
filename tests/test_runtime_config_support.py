@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from runtime_config_support import build_live_runtime, load_cycle_execution_settings
+from strategy_registry import BINANCE_PLATFORM, CRYPTO_DOMAIN, DEFAULT_STRATEGY_PROFILE, get_supported_profiles_for_platform
 
 
 class RuntimeConfigSupportTests(unittest.TestCase):
@@ -20,6 +21,19 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertEqual(settings.btc_status_report_interval_hours, 24)
         self.assertTrue(settings.allow_new_trend_entries_on_degraded)
+        self.assertEqual(settings.strategy_profile, DEFAULT_STRATEGY_PROFILE)
+        self.assertEqual(settings.strategy_domain, CRYPTO_DOMAIN)
+
+    def test_load_cycle_execution_settings_rejects_unknown_strategy_profile(self):
+        with patch.dict(os.environ, {"STRATEGY_PROFILE": "global_etf_rotation"}, clear=False):
+            with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
+                load_cycle_execution_settings()
+
+    def test_platform_supported_profiles_are_filtered_by_registry(self):
+        self.assertEqual(
+            get_supported_profiles_for_platform(BINANCE_PLATFORM),
+            frozenset({DEFAULT_STRATEGY_PROFILE}),
+        )
 
     def test_build_live_runtime_reads_env_and_preserves_injected_hooks(self):
         sentinel_now = datetime(2026, 3, 15, tzinfo=timezone.utc)

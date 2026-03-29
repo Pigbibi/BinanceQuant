@@ -6,6 +6,11 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from runtime_support import ExecutionRuntime
+from strategy_registry import (
+    BINANCE_PLATFORM,
+    DEFAULT_STRATEGY_PROFILE,
+    resolve_strategy_definition,
+)
 
 
 def get_env_int(name: str, default: int) -> int:
@@ -33,15 +38,23 @@ def get_env_csv(name: str, default_values: list[str] | tuple[str, ...]) -> list[
 class CycleExecutionSettings:
     btc_status_report_interval_hours: int
     allow_new_trend_entries_on_degraded: bool
+    strategy_profile: str
+    strategy_domain: str
 
 
 def load_cycle_execution_settings() -> CycleExecutionSettings:
+    strategy_definition = resolve_strategy_definition(
+        os.getenv("STRATEGY_PROFILE"),
+        platform_id=BINANCE_PLATFORM,
+    )
     return CycleExecutionSettings(
         btc_status_report_interval_hours=max(1, min(24, get_env_int("BTC_STATUS_REPORT_INTERVAL_HOURS", 24))),
         allow_new_trend_entries_on_degraded=get_env_bool(
             "TREND_POOL_ALLOW_NEW_ENTRIES_ON_DEGRADED",
             False,
         ),
+        strategy_profile=strategy_definition.profile,
+        strategy_domain=strategy_definition.domain,
     )
 
 

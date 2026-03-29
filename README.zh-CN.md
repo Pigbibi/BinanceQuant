@@ -283,8 +283,11 @@ AHR999: 0.45
 
 - `GLOBAL_TELEGRAM_CHAT_ID`
 - `NOTIFY_LANG`
+- `STRATEGY_PROFILE`（建议设为 `crypto_leader_rotation`）
 
 也就是说，如果你在多个 quant 仓库之间保留一层很小的共享配置，这个仓库直接使用组织级 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG`。`TG_TOKEN`、Binance API key、`GCP_SA_KEY` 仍然应该留在这个仓库自己的 secrets 里。
+
+`STRATEGY_PROFILE` 现在也保留成了一层很薄的未来策略切换入口；当前这个仓库只支持 `crypto_leader_rotation`，它所属的策略大类是 `crypto`。
 
 ### 4. GCP / Firestore
 

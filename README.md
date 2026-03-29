@@ -225,11 +225,14 @@ Optional:
 | `TREND_POOL_ACCEPTABLE_MODES` | Comma-separated allowed upstream modes (default `core_major`) |
 | `TREND_POOL_EXPECTED_SIZE` | Expected upstream live-pool size for contract checks (default `5`) |
 | `TREND_POOL_ALLOW_NEW_ENTRIES_ON_DEGRADED` | Allow trend buys when running on last-known-good or fallback pool sources (default `false`) |
+| `STRATEGY_PROFILE` | Strategy profile selector (default: `crypto_leader_rotation`, currently the only supported `crypto` value) |
 | `NOTIFY_LANG` | Log and notification language: `en` (English, default) or `zh` (Chinese) |
 
 ## Notification Format
 
 Runtime logs and Telegram notifications use the same language switch. Set `NOTIFY_LANG=zh` for Chinese or leave default for English.
+
+`STRATEGY_PROFILE` is now kept as a thin future strategy-switch entry. Today this repo only supports `crypto_leader_rotation`, and its current strategy domain is `crypto`.
 
 **Strategy heartbeat:**
 ```
