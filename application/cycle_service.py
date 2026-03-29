@@ -6,6 +6,189 @@ import json
 import os
 
 
+def execute_strategy_cycle(
+    runtime,
+    *,
+    build_execution_report,
+    ensure_runtime_client,
+    load_cycle_execution_settings,
+    load_cycle_state,
+    append_trend_pool_source_logs,
+    capture_market_snapshot,
+    compute_portfolio_allocation,
+    maybe_reset_daily_state,
+    compute_daily_pnls,
+    append_portfolio_report,
+    run_daily_circuit_breaker,
+    execute_trend_rotation,
+    execute_btc_dca_cycle,
+    manage_usdt_earn_buffer_runtime,
+    maybe_send_periodic_btc_status_report,
+    runtime_set_trade_state,
+    append_report_error,
+    runtime_notify,
+    translate_fn,
+    traceback_module,
+):
+    atr_multiplier = 2.5
+    circuit_breaker_pct = -0.05
+    min_bnb_value, buy_bnb_amount = 10.0, 15.0
+    cycle_settings = load_cycle_execution_settings()
+    btc_status_report_interval_hours = cycle_settings.btc_status_report_interval_hours
+    allow_new_trend_entries_on_degraded = cycle_settings.allow_new_trend_entries_on_degraded
+
+    report = build_execution_report(runtime)
+    log_buffer = []
+
+    try:
+        if not ensure_runtime_client(runtime, report):
+            return report
+
+        cycle_state = load_cycle_state(runtime, report, allow_new_trend_entries_on_degraded)
+        if cycle_state is None:
+            return report
+
+        state, trend_pool_resolution, runtime_trend_universe, allow_new_trend_entries = cycle_state
+        append_trend_pool_source_logs(log_buffer, trend_pool_resolution, allow_new_trend_entries)
+
+        report["upstream_pool_symbols"] = list(runtime_trend_universe.keys())
+        if trend_pool_resolution["degraded"]:
+            report["degraded_mode_level"] = trend_pool_resolution.get("source", "unknown")
+
+        market_snapshot = capture_market_snapshot(
+            runtime,
+            report,
+            runtime_trend_universe,
+            log_buffer,
+            min_bnb_value,
+            buy_bnb_amount,
+        )
+        u_total = market_snapshot["u_total"]
+        fuel_val = market_snapshot["fuel_val"]
+        dynamic_usdt_buffer = market_snapshot["dynamic_usdt_buffer"]
+        prices = market_snapshot["prices"]
+        balances = market_snapshot["balances"]
+        btc_snapshot = market_snapshot["btc_snapshot"]
+        trend_indicators = market_snapshot["trend_indicators"]
+
+        allocation = compute_portfolio_allocation(runtime_trend_universe, balances, prices, u_total, fuel_val)
+        total_equity = allocation["total_equity"]
+        trend_val_equity = allocation["trend_val"]
+
+        report["total_equity_usdt"] = total_equity
+        report["trend_equity_usdt"] = trend_val_equity
+
+        now_utc = runtime.now_utc
+        today_utc = now_utc.strftime("%Y-%m-%d")
+        today_id_str = now_utc.strftime("%Y%m%d")
+
+        maybe_reset_daily_state(state, runtime, report, today_utc, total_equity, trend_val_equity)
+        daily_pnl, trend_daily_pnl = compute_daily_pnls(state, total_equity, trend_val_equity)
+        append_portfolio_report(log_buffer, allocation, fuel_val, daily_pnl, trend_daily_pnl, btc_snapshot)
+
+        if state.get("is_circuit_broken"):
+            log_buffer.insert(0, translate_fn("circuit_breaker_latched_line", total_equity=total_equity))
+            return report
+
+        if run_daily_circuit_breaker(
+            runtime,
+            report,
+            state,
+            runtime_trend_universe,
+            balances,
+            prices,
+            trend_daily_pnl,
+            circuit_breaker_pct,
+            log_buffer,
+        ):
+            return report
+
+        u_total = execute_trend_rotation(
+            runtime,
+            report,
+            state,
+            runtime_trend_universe,
+            trend_indicators,
+            btc_snapshot,
+            prices,
+            balances,
+            u_total,
+            fuel_val,
+            log_buffer,
+            today_id_str,
+            allow_new_trend_entries,
+            allow_pool_refresh=not trend_pool_resolution["degraded"],
+            atr_multiplier=atr_multiplier,
+        )
+
+        post_trade_allocation = compute_portfolio_allocation(runtime_trend_universe, balances, prices, u_total, fuel_val)
+        total_equity = post_trade_allocation["total_equity"]
+        trend_val_equity = post_trade_allocation["trend_val"]
+
+        report["total_equity_usdt"] = total_equity
+        report["trend_equity_usdt"] = trend_val_equity
+
+        btc_target_ratio = post_trade_allocation["btc_target_ratio"]
+        dca_usdt_pool = post_trade_allocation["dca_usdt_pool"]
+        dca_val = post_trade_allocation["dca_val"]
+        _, trend_daily_pnl = compute_daily_pnls(state, total_equity, trend_val_equity)
+
+        u_total = execute_btc_dca_cycle(
+            runtime,
+            report,
+            state,
+            balances,
+            prices,
+            u_total,
+            total_equity,
+            dca_usdt_pool,
+            dca_val,
+            btc_snapshot,
+            btc_target_ratio,
+            today_id_str,
+            log_buffer,
+        )
+
+        manage_usdt_earn_buffer_runtime(
+            runtime,
+            report,
+            dynamic_usdt_buffer,
+            log_buffer,
+            spot_free_override=u_total if runtime.dry_run else None,
+        )
+
+        maybe_send_periodic_btc_status_report(
+            state,
+            runtime.tg_token,
+            runtime.tg_chat_id,
+            now_utc,
+            btc_status_report_interval_hours,
+            total_equity,
+            trend_val_equity,
+            trend_daily_pnl,
+            prices["BTCUSDT"],
+            btc_snapshot,
+            btc_target_ratio,
+            notifier_fn=lambda text: runtime_notify(runtime, report, text),
+        )
+
+        runtime_set_trade_state(runtime, report, state, reason="cycle_complete")
+
+    except Exception as exc:
+        report["status"] = "error"
+        append_report_error(report, str(exc), stage="execute_cycle")
+        if runtime.print_traceback:
+            traceback_module.print_exc()
+        try:
+            runtime_notify(runtime, report, f"{translate_fn('system_crash')}\n{str(exc)[:200]}")
+        except Exception:
+            pass
+    finally:
+        report["log_lines"] = list(log_buffer)
+
+    return report
+
+
 def write_execution_report(report, *, reports_dir="reports", filename="execution_report.json"):
     os.makedirs(reports_dir, exist_ok=True)
     output_path = os.path.join(reports_dir, filename)
@@ -31,4 +214,3 @@ def run_live_cycle(
         exit_fn(1)
 
     return report, report_path
-
