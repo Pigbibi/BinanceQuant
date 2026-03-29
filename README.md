@@ -1,6 +1,11 @@
 # BinancePlatform
 
-Language: English | [Simplified Chinese](README.zh-CN.md)
+Language: [English](#english) | [简体中文](#中文) | [中文详版](README.zh-CN.md)
+
+---
+
+<a id="english"></a>
+## English
 
 Automated crypto quant for Binance spot: BTC DCA core plus altcoin trend rotation. Uses valuation (AHR999, Z-Score) and trend gates (MA200, slope). Compatible with Binance flexible earn (auto redeem/subscribe), USDT buffer, BNB fuel, Telegram alerts, and Firestore state.
 
@@ -218,6 +223,53 @@ Across multiple quant repositories, `GLOBAL_TELEGRAM_CHAT_ID` and `NOTIFY_LANG` 
 Optional:
 
 | Variable | Description |
+
+---
+
+<a id="中文"></a>
+## 中文
+
+这是一个运行在 Binance 现货上的自动化量化仓库，核心由两部分组成：
+
+- BTC 核心仓定投与分档止盈
+- 山寨币趋势轮动层
+
+项目使用估值指标（`AHR999`、`Z-Score`）和趋势闸门（`MA200`、均线斜率），并兼容 Binance Flexible Earn、USDT 缓冲、BNB 手续费仓、Telegram 通知和 Firestore 状态存储。
+
+当前 `crypto_leader_rotation` 的纯策略模块来自 `CryptoStrategies`。
+
+### 执行边界
+
+`BinancePlatform` 负责：
+
+- 上游月池 payload 校验和降级逻辑
+- 交易执行、安全检查和余额处理
+- 运行时状态、Telegram 通知和回放工具
+
+它不负责：
+
+- 上游月度研究和发布说明
+- 超出执行所需范围的深度策略分析
+
+### 仓库结构
+
+- `main.py`：小时级 live 编排入口
+- `strategy_core.py`：共享纯策略逻辑
+- `research/`：研究和审计工具，不参与 live 执行
+- `run_*`：本地固定输入回放和维护脚本
+- `tests/fixtures/`：回放回归的固定输入
+
+### 运行环境
+
+必需环境变量：
+
+- `BINANCE_API_KEY`
+- `BINANCE_API_SECRET`
+- `TG_TOKEN`
+- `GLOBAL_TELEGRAM_CHAT_ID`
+- `GOOGLE_APPLICATION_CREDENTIALS`
+
+可选环境变量、趋势池契约、日志和月度审阅的完整中文说明，见 [README.zh-CN.md](README.zh-CN.md)。
 |----------|-------------|
 | `BTC_STATUS_REPORT_INTERVAL_HOURS` | Interval for BTC status report (default 24) |
 | `TREND_POOL_FILE` | Path to `live_pool_legacy.json` |

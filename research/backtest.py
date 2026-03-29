@@ -187,7 +187,7 @@ def prepare_trend_daily_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["avg_quote_vol_90"] = df["quote_vol"].rolling(90).mean()
     df["avg_quote_vol_180"] = df["quote_vol"].rolling(180).mean()
 
-    # 用更长窗口衡量“是否长期站上大趋势”，减少频繁切池。
+    # Use a longer window to confirm the broad trend and reduce frequent pool switching.
     df["trend_persist_90"] = (df["close"] > df["sma200"]).rolling(90).mean()
     df["age_days"] = np.arange(1, len(df) + 1)
 
