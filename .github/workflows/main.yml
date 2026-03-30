@@ -64,20 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${VALIDATE_ONLY:-false}" = "true" ]; then
-            venv/bin/python - <<'PY'
-            from google.cloud import firestore
-
-            client = firestore.Client()
-            collections = []
-            for index, collection in enumerate(client.collections()):
-                if index >= 3:
-                    break
-                collections.append(collection.id)
-            print(
-                f"Validated Google Cloud auth and Firestore access. "
-                f"project={client.project} sample_collections={collections}"
-            )
-            PY
+            venv/bin/python -c "from google.cloud import firestore; client = firestore.Client(); collections = [collection.id for _, collection in zip(range(3), client.collections())]; print(f'Validated Google Cloud auth and Firestore access. project={client.project} sample_collections={collections}')"
             exit 0
           fi
           venv/bin/python main.py
