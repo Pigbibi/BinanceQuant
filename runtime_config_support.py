@@ -8,7 +8,6 @@ from typing import Any, Callable
 from runtime_support import ExecutionRuntime
 from strategy_registry import (
     BINANCE_PLATFORM,
-    DEFAULT_STRATEGY_PROFILE,
     resolve_strategy_definition,
 )
 

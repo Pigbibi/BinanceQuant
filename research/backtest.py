@@ -421,8 +421,6 @@ def simulate_window(strategy, window_name: str, start: pd.Timestamp, end: pd.Tim
         dca_val = 0.0 if pd.isna(btc_price) else positions["BTCUSDT"] * btc_price
         total_equity = cash_usdt + trend_val + dca_val
         allocation = compute_allocation_budgets(total_equity, cash_usdt, trend_val, dca_val)
-        btc_target_ratio = allocation["btc_target_ratio"]
-        trend_target_ratio = allocation["trend_target_ratio"]
         trend_usdt_pool = allocation["trend_usdt_pool"]
         trend_layer_equity = allocation["trend_layer_equity"]
 
@@ -530,8 +528,6 @@ def simulate_window(strategy, window_name: str, start: pd.Timestamp, end: pd.Tim
         dca_val = 0.0 if pd.isna(btc_price) else positions["BTCUSDT"] * btc_price
         total_equity = cash_usdt + trend_val + dca_val
         post_trade_allocation = compute_allocation_budgets(total_equity, cash_usdt, trend_val, dca_val)
-        btc_target_ratio = post_trade_allocation["btc_target_ratio"]
-        trend_target_ratio = post_trade_allocation["trend_target_ratio"]
         trend_usdt_pool = post_trade_allocation["trend_usdt_pool"]
         dca_usdt_pool = post_trade_allocation["dca_usdt_pool"]
 

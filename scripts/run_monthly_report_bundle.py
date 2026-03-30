@@ -226,9 +226,9 @@ def format_review_markdown(bundle: dict[str, Any]) -> str:
     lines: list[str] = []
 
     lines.append(f"# Monthly Execution Review — {month}")
-    lines.append(f"")
+    lines.append("")
     lines.append(f"_Generated: {generated}_")
-    lines.append(f"")
+    lines.append("")
 
     # Run statistics
     lines.append("## Run Statistics")
