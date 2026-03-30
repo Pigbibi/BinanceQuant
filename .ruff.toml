@@ -1,0 +1,6 @@
+target-version = "py311"
+
+[lint.per-file-ignores]
+"tests/*.py" = ["E402"]
+"research/backtest.py" = ["E402"]
+"run_cycle_replay.py" = ["E402"]

@@ -1,4 +1,3 @@
-import os
 import requests
 
 from notify_i18n_support import build_telegram_message, translate as t

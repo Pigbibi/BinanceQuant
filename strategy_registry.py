@@ -4,6 +4,7 @@ from crypto_strategies import get_strategy_definitions as get_crypto_strategy_de
 
 from quant_platform_kit.common.strategies import (
     CRYPTO_DOMAIN,
+    StrategyDefinition,
     get_supported_profiles_for_platform as qpk_get_supported_profiles_for_platform,
     resolve_strategy_definition as qpk_resolve_strategy_definition,
 )

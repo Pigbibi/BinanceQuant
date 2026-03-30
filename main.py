@@ -5,10 +5,8 @@ Pure strategy math, state normalization, upstream contract handling, exchange
 helpers, and live service adapters live in dedicated modules.
 """
 
-import os
 import time
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 import traceback
 from entrypoints.cli import run_cli_entrypoint
@@ -37,7 +35,6 @@ from market_snapshot_support import (
     capture_market_snapshot as ms_capture_market_snapshot,
 )
 from runtime_support import (
-    ExecutionRuntime,
     append_report_error,
     build_execution_report,
     next_order_id,
